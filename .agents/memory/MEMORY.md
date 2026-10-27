@@ -1,2 +1,2 @@
-- [Docker runtime checks](docker-runtime-checks.md) — this workspace can run PostgreSQL containers while blocking container exec and exec-based health checks.
+- [Docker runtime checks](docker-runtime-checks.md) — this workspace can block container exec/health checks and bridge DNS; host networking worked for registry access.
 - [Opt-in event mapping](event-mapping-boundary.md) — active mappings may relax source shape, but no-map imports must preserve legacy parsing and payload behavior.

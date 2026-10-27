@@ -7,3 +7,7 @@ node_modules
 **/dist
 coverage
 imports
+*.dump
+*.tar
+*.tar.gz
+*.sha256

@@ -10,6 +10,8 @@ Prerequisites: Node.js 24 LTS, pnpm 10.26.1 via Corepack, Docker Compose, and Po
 corepack enable
 cp .env.example .env
 docker compose up -d db
+pnpm --filter @kudu/backend auth:hash-password
+# Set the generated hash and a random SESSION_SECRET in .env.
 pnpm install --frozen-lockfile
 pnpm db:migrate
 pnpm dev
@@ -17,7 +19,9 @@ pnpm dev
 
 Open the frontend at <http://localhost:5173>. The API listens at <http://localhost:3000>; health checks remain available at `GET /healthz` and `GET /api/v1/health`. Asset and data-source registry routes are documented in [docs/API.md](docs/API.md) and [docs/openapi.yaml](docs/openapi.yaml).
 
-For a production-style local run, use `pnpm build`, then `pnpm start`. Docker Compose builds and runs the web application and database together; set a private `POSTGRES_PASSWORD` in `.env` first.
+The password hash contains `$`; quote its value with single quotes in `.env`. For isolated loopback HTTP development only, set `KUDU_COOKIE_SECURE=false` if the browser does not accept Secure cookies.
+
+For production, use the Docker Compose procedure in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). It builds the versioned production image, waits for PostgreSQL, applies migrations once, and starts the app only after migration succeeds. The same guide covers backup/restore and transferring images to offline hosts.
 
 ## Project map
 

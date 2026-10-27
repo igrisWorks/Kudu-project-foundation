@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import test from "node:test";
 import { loadConfig } from "./config.js";
 
@@ -52,4 +53,28 @@ test("loads auth settings without supplying a default password", () => {
     () => loadConfig({ DATABASE_URL: "postgres://localhost/kudu", KUDU_COOKIE_SECURE: "maybe" }),
     /KUDU_COOKIE_SECURE must be true or false/,
   );
+});
+
+test("requires valid authentication and secure cookies in production", () => {
+  const validHash = `scrypt$16384$8$1$${randomBytes(16).toString("base64url")}$${randomBytes(32).toString("base64url")}`;
+  const productionConfig = {
+    DATABASE_URL: "postgresql://localhost/kudu",
+    NODE_ENV: "production",
+    KUDU_AUTH_PASSWORD_HASH: validHash,
+    SESSION_SECRET: randomBytes(32).toString("base64url"),
+  };
+
+  assert.throws(
+    () => loadConfig({ DATABASE_URL: productionConfig.DATABASE_URL, NODE_ENV: "production" }),
+    /valid KUDU_AUTH_PASSWORD_HASH and a SESSION_SECRET/,
+  );
+  assert.throws(
+    () => loadConfig({ ...productionConfig, KUDU_AUTH_PASSWORD_HASH: "invalid" }),
+    /valid KUDU_AUTH_PASSWORD_HASH and a SESSION_SECRET/,
+  );
+  assert.throws(
+    () => loadConfig({ ...productionConfig, KUDU_COOKIE_SECURE: "false" }),
+    /KUDU_COOKIE_SECURE must be true in production/,
+  );
+  assert.equal(loadConfig(productionConfig).auth.cookieSecure, true);
 });

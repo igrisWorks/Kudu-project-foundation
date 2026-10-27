@@ -1,4 +1,4 @@
-import type { AuthConfiguration } from "./auth.js";
+import { AuthManager, type AuthConfiguration } from "./auth.js";
 
 export interface AppConfig {
   databaseUrl: string;
@@ -43,15 +43,29 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     throw new Error("KUDU_COOKIE_SECURE must be true or false.");
   }
 
+  const auth: AuthConfiguration = {
+    passwordHash: environment.KUDU_AUTH_PASSWORD_HASH?.trim() || undefined,
+    sessionSecret: environment.SESSION_SECRET?.trim() || undefined,
+    cookieSecure: rawCookieSecure !== "false",
+  };
+  if (environment.NODE_ENV?.trim().toLowerCase() === "production") {
+    if (!new AuthManager(auth).configured) {
+      throw new Error(
+        "Production requires a valid KUDU_AUTH_PASSWORD_HASH and a SESSION_SECRET of at least 32 bytes.",
+      );
+    }
+    if (!auth.cookieSecure) {
+      throw new Error(
+        "KUDU_COOKIE_SECURE must be true in production; use HTTPS for remote browser access.",
+      );
+    }
+  }
+
   return {
     databaseUrl,
     host: environment.HOST?.trim() || "127.0.0.1",
     port,
     logLevel,
-    auth: {
-      passwordHash: environment.KUDU_AUTH_PASSWORD_HASH?.trim() || undefined,
-      sessionSecret: environment.SESSION_SECRET?.trim() || undefined,
-      cookieSecure: rawCookieSecure !== "false",
-    },
+    auth,
   };
 }

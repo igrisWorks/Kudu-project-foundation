@@ -1,3 +1,12 @@
+x-kudu-environment: &kudu-environment
+  DATABASE_URL: "postgresql://${POSTGRES_USER:-kudu}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kudu}"
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  KUDU_AUTH_PASSWORD_HASH: ${KUDU_AUTH_PASSWORD_HASH:-}
+  SESSION_SECRET: ${SESSION_SECRET:-}
+  KUDU_COOKIE_SECURE: ${KUDU_COOKIE_SECURE:-true}
+  KUDU_REST_TRUSTED_HOSTS: ${KUDU_REST_TRUSTED_HOSTS:-}
+
 services:
   db:
     image: postgres:18.6-alpine
@@ -18,21 +27,45 @@ services:
       start_period: 5s
 
   app:
+    image: kudu:${KUDU_VERSION:-0.1.0}
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        KUDU_VERSION: ${KUDU_VERSION:-0.1.0}
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file:
+      - path: .env.sources
+        required: false
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-kudu}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kudu}
+      <<: *kudu-environment
       HOST: 0.0.0.0
       PORT: 3000
-      LOG_LEVEL: ${LOG_LEVEL:-info}
       KUDU_IMPORT_DIRECTORY: /imports
-      NODE_ENV: production
     volumes:
       - ${KUDU_IMPORT_HOST_DIRECTORY:-./imports}:/imports:ro
     ports:
       - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    image: kudu:${KUDU_VERSION:-0.1.0}
+    command: ["node", "backend/dist/migrate.js"]
+    restart: "no"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      <<: *kudu-environment
     depends_on:
       db:
         condition: service_healthy
