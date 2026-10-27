@@ -1,0 +1,696 @@
+openapi: 3.1.0
+info:
+  title: Kudu Registry API
+  version: 0.1.0
+  summary: Asset and data-source registry API
+  description: |
+    Versioned API for Kudu's asset and data-source registries.
+
+    Data-source registration stores metadata only. Kudu does not connect to
+    REST endpoints, read files, or ingest data. REST credential references are
+    accepted only as environment-variable names and are redacted from responses.
+
+    This API does not yet implement authentication or authorization. Write
+    endpoints must not be exposed to untrusted networks.
+servers:
+  - url: /
+security: []
+tags:
+  - name: Health
+  - name: Assets
+  - name: Data sources
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: getLiveness
+      summary: Check process liveness
+      responses:
+        "200":
+          description: The HTTP process is accepting requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    const: ok
+  /api/v1/health:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Check API and database readiness
+      responses:
+        "200":
+          description: Database is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /api/v1/assets:
+    get:
+      tags: [Assets]
+      operationId: listAssets
+      summary: List and search assets
+      parameters:
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: status
+          in: query
+          description: Defaults to active.
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
+      responses:
+        "200":
+          description: A stable, key-ordered page of assets.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Asset"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      tags: [Assets]
+      operationId: createAsset
+      summary: Create an asset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetCreate"
+      responses:
+        "201":
+          description: Asset created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/assets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [Assets]
+      operationId: getAsset
+      summary: Get an asset and its hierarchy
+      responses:
+        "200":
+          description: Asset record with parent and children.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Assets]
+      operationId: updateAsset
+      summary: Update, archive, or restore an asset
+      description: |
+        Send only the fields to change. Set parentAssetId to null to remove a
+        parent, description to null to clear it, or archived to true/false to
+        archive/restore. Delete is intentionally not supported.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetUpdate"
+      responses:
+        "200":
+          description: Updated asset.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/data-sources:
+    get:
+      tags: [Data sources]
+      operationId: listDataSources
+      summary: List and search data sources
+      parameters:
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: sourceType
+          in: query
+          schema:
+            $ref: "#/components/schemas/DataSourceType"
+        - name: enabled
+          in: query
+          description: Defaults to all states.
+          schema:
+            type: string
+            enum: [all, enabled, disabled]
+            default: all
+      responses:
+        "200":
+          description: A stable, display-name-ordered page of data sources.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/DataSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      tags: [Data sources]
+      operationId: createDataSource
+      summary: Register a data source
+      description: Stores metadata only; this operation does not connect or ingest.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DataSourceCreate"
+      responses:
+        "201":
+          description: Data source metadata created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/data-sources/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [Data sources]
+      operationId: getDataSource
+      summary: Get data-source metadata
+      responses:
+        "200":
+          description: Data-source metadata with redacted credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Data sources]
+      operationId: updateDataSource
+      summary: Update data-source metadata
+      description: |
+        Send only fields to change. When replacing a REST configuration,
+        omitting credentialRef preserves the existing reference; setting it to
+        null clears it. Changing sourceType requires a matching configuration.
+        This operation never connects or starts ingestion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DataSourceUpdate"
+      responses:
+        "200":
+          description: Updated data source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Search:
+      name: search
+      in: query
+      description: Literal, case-insensitive match on key and display/name fields; maximum 120 characters.
+      schema:
+        type: string
+        maxLength: 120
+    Page:
+      name: page
+      in: query
+      description: One-based page number; defaults to 1.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000000
+        default: 1
+    PageSize:
+      name: pageSize
+      in: query
+      description: Results per page; defaults to 25.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+  responses:
+    BadRequest:
+      description: Invalid request or field validation failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Duplicate key or referenced record conflict.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Requested record does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Database is not ready.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HealthResponse"
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, database, checkedAt]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        database:
+          type: string
+          enum: [connected, unavailable]
+        checkedAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            fields:
+              type: object
+              additionalProperties:
+                type: string
+    Page:
+      type: object
+      required: [items, total, page, pageSize]
+      properties:
+        items:
+          type: array
+          items: {}
+        total:
+          type: integer
+          minimum: 0
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+    AssetType:
+      type: string
+      enum: [machine, production_line, plc, camera, sensor, other]
+    AssetStatus:
+      type: string
+      enum: [active, archived]
+    AssetKey:
+      type: string
+      minLength: 1
+      maxLength: 80
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+    ExternalIdentifier:
+      type: object
+      additionalProperties: false
+      required: [sourceKey, externalId]
+      properties:
+        sourceKey:
+          $ref: "#/components/schemas/AssetKey"
+        externalId:
+          type: string
+          minLength: 1
+          maxLength: 256
+    AssetParent:
+      type: object
+      required: [id, assetKey, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        assetKey:
+          $ref: "#/components/schemas/AssetKey"
+        name:
+          type: string
+    AssetChild:
+      type: object
+      required: [id, assetKey, name, assetType]
+      properties:
+        id:
+          type: string
+          format: uuid
+        assetKey:
+          $ref: "#/components/schemas/AssetKey"
+        name:
+          type: string
+        assetType:
+          $ref: "#/components/schemas/AssetType"
+    Asset:
+      type: object
+      required:
+        - id
+        - assetKey
+        - name
+        - assetType
+        - description
+        - parentAssetId
+        - parentAsset
+        - externalIdentifiers
+        - status
+        - createdAt
+        - updatedAt
+        - archivedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        assetKey:
+          $ref: "#/components/schemas/AssetKey"
+        name:
+          type: string
+          maxLength: 160
+        assetType:
+          $ref: "#/components/schemas/AssetType"
+        description:
+          type: [string, "null"]
+          maxLength: 2000
+        parentAssetId:
+          type: [string, "null"]
+          format: uuid
+        parentAsset:
+          oneOf:
+            - $ref: "#/components/schemas/AssetParent"
+            - type: "null"
+        externalIdentifiers:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/ExternalIdentifier"
+        status:
+          $ref: "#/components/schemas/AssetStatus"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: [string, "null"]
+          format: date-time
+    AssetDetail:
+      allOf:
+        - $ref: "#/components/schemas/Asset"
+        - type: object
+          required: [children]
+          properties:
+            children:
+              type: array
+              items:
+                $ref: "#/components/schemas/AssetChild"
+    AssetCreate:
+      type: object
+      additionalProperties: false
+      required: [assetKey, name, assetType]
+      properties:
+        assetKey:
+          $ref: "#/components/schemas/AssetKey"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        assetType:
+          $ref: "#/components/schemas/AssetType"
+        description:
+          type: [string, "null"]
+          maxLength: 2000
+        parentAssetId:
+          type: [string, "null"]
+          format: uuid
+        externalIdentifiers:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/ExternalIdentifier"
+    AssetUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        assetKey:
+          $ref: "#/components/schemas/AssetKey"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        assetType:
+          $ref: "#/components/schemas/AssetType"
+        description:
+          type: [string, "null"]
+          maxLength: 2000
+        parentAssetId:
+          type: [string, "null"]
+          format: uuid
+        externalIdentifiers:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/ExternalIdentifier"
+        archived:
+          type: boolean
+    DataSourceType:
+      type: string
+      enum: [rest_api, json_file, csv_file, manual]
+    ConnectorStatus:
+      type: string
+      enum: [not_implemented, connected, error, unsupported]
+    DataSourceKey:
+      type: string
+      minLength: 1
+      maxLength: 80
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+    DataSourceConfigurationInput:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, baseUrl]
+          properties:
+            kind:
+              const: rest_api
+            baseUrl:
+              type: string
+              format: uri
+              description: HTTP(S) URL without credentials, query parameters, or fragments.
+            credentialRef:
+              type: [string, "null"]
+              pattern: "^env:KUDU_SOURCE_[A-Z0-9_]{1,80}$"
+              description: Environment-variable name only, never the credential value.
+        - type: object
+          additionalProperties: false
+          required: [kind, relativePath]
+          properties:
+            kind:
+              const: json_file
+            relativePath:
+              $ref: "#/components/schemas/RelativePath"
+        - type: object
+          additionalProperties: false
+          required: [kind, relativePath]
+          properties:
+            kind:
+              const: csv_file
+            relativePath:
+              $ref: "#/components/schemas/RelativePath"
+        - type: object
+          additionalProperties: false
+          required: [kind]
+          properties:
+            kind:
+              const: manual
+    RelativePath:
+      type: string
+      minLength: 1
+      maxLength: 500
+      description: Relative to a future configured storage root; traversal segments are rejected.
+      pattern: "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(/|$)).+$"
+    DataSourceConfigurationMetadata:
+      oneOf:
+        - type: object
+          required: [kind, baseUrl, credentialConfigured]
+          properties:
+            kind:
+              const: rest_api
+            baseUrl:
+              type: string
+              format: uri
+            credentialConfigured:
+              type: boolean
+              description: Only indicates whether a reference exists; the reference and secret are never returned.
+        - type: object
+          required: [kind, relativePath]
+          properties:
+            kind:
+              const: json_file
+            relativePath:
+              $ref: "#/components/schemas/RelativePath"
+        - type: object
+          required: [kind, relativePath]
+          properties:
+            kind:
+              const: csv_file
+            relativePath:
+              $ref: "#/components/schemas/RelativePath"
+        - type: object
+          required: [kind, referenceOnly]
+          properties:
+            kind:
+              const: manual
+            referenceOnly:
+              const: true
+    DataSource:
+      type: object
+      required:
+        - id
+        - sourceKey
+        - displayName
+        - sourceType
+        - description
+        - configuration
+        - enabled
+        - connectionStatus
+        - ingestionStatus
+        - lastSuccessfulSyncAt
+        - lastErrorSummary
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceKey:
+          $ref: "#/components/schemas/DataSourceKey"
+        displayName:
+          type: string
+          maxLength: 160
+        sourceType:
+          $ref: "#/components/schemas/DataSourceType"
+        description:
+          type: [string, "null"]
+          maxLength: 2000
+        configuration:
+          $ref: "#/components/schemas/DataSourceConfigurationMetadata"
+        enabled:
+          type: boolean
+        connectionStatus:
+          $ref: "#/components/schemas/ConnectorStatus"
+        ingestionStatus:
+          $ref: "#/components/schemas/ConnectorStatus"
+        lastSuccessfulSyncAt:
+          type: [string, "null"]
+          format: date-time
+        lastErrorSummary:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    DataSourceCreate:
+      type: object
+      additionalProperties: false
+      required: [sourceKey, displayName, sourceType, configuration]
+      properties:
+        sourceKey:
+          $ref: "#/components/schemas/DataSourceKey"
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 160
+        sourceType:
+          $ref: "#/components/schemas/DataSourceType"
+        description:
+          type: [string, "null"]
+          maxLength: 2000
+        configuration:
+          $ref: "#/components/schemas/DataSourceConfigurationInput"
+        enabled:
+          type: boolean
+    DataSourceUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        sourceKey:
+          $ref: "#/components/schemas/DataSourceKey"
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 160
+        sourceType:
+          $ref: "#/components/schemas/DataSourceType"
+        description:
+          type: [string, "null"]
+          maxLength: 2000
+        configuration:
+          $ref: "#/components/schemas/DataSourceConfigurationInput"
+        enabled:
+          type: boolean

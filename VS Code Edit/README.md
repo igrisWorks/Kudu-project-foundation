@@ -15,7 +15,7 @@ pnpm db:migrate
 pnpm dev
 ```
 
-Open the frontend at <http://localhost:5173>. The API listens at <http://localhost:3000>; its initial status endpoint is `GET /api/v1/health`.
+Open the frontend at <http://localhost:5173>. The API listens at <http://localhost:3000>; health checks remain available at `GET /healthz` and `GET /api/v1/health`. Asset and data-source registry routes are documented in [docs/API.md](docs/API.md) and [docs/openapi.yaml](docs/openapi.yaml).
 
 For a production-style local run, use `pnpm build`, then `pnpm start`. Docker Compose builds and runs the web application and database together; set a private `POSTGRES_PASSWORD` in `.env` first.
 
@@ -37,4 +37,4 @@ For a production-style local run, use `pnpm build`, then `pnpm start`. Docker Co
 - [Data model](docs/DATA_MODEL.md)
 - [Changelog](docs/CHANGELOG.md)
 
-This is a foundation, not the Kudu MVP: no industrial assets, sources, ingestion, event records, mapping workflows, or machine-control operations are implemented yet.
+The first MVP slice now includes persistent asset and data-source registries. Connectors, ingestion, event records, mapping workflows, authentication, and machine-control operations are not implemented. Registry write endpoints currently have no authentication; keep the application bound to loopback and do not expose it to untrusted networks.

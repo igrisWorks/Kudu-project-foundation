@@ -19,7 +19,9 @@ The browser talks to the versioned REST API at `/api/v1`. Vite proxies `/api` to
 
 `VS Code Edit/` is the source of truth. The surrounding Replit workspace may contain platform routing and tooling, but Kudu's application and setup must remain runnable from this directory alone. No Replit service, cloud database, external API, or internet connection at runtime is required after dependencies and container images are present.
 
-The API exposes health information only at this stage. It has no machine-control operations. Database access uses configured credentials; migrations are transactional, serialized with a PostgreSQL advisory lock, and reject checksum changes to already-applied files.
+The API exposes liveness and readiness probes plus versioned asset and data-source registry routes. Asset parent links are validated and cycle-checked while serialized with a PostgreSQL advisory lock. Data-source registration stores metadata only; it does not connect, read files, or ingest data. The API has no machine-control operations.
+
+Registry writes are currently unauthenticated. The default development host is loopback, and Docker Compose publishes the app port only on loopback. Do not expose this release to untrusted networks until authentication and authorization are implemented. Database access uses configured credentials; migrations are transactional, serialized with a separate PostgreSQL advisory lock, and reject checksum changes to already-applied files.
 
 ## Compatibility decisions
 

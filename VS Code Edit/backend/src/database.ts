@@ -1,8 +1,52 @@
-import { Kysely, PostgresDialect, sql } from "kysely";
+import { Kysely, PostgresDialect, sql, type ColumnType, type Generated } from "kysely";
 import { Pool } from "pg";
+import type {
+  AssetType,
+  ConnectorStatus,
+  DataSourceType,
+  ExternalIdentifier,
+} from "@kudu/shared";
+
+type TimestampColumn = ColumnType<Date, Date | string | undefined, Date | string | undefined>;
+
+export type StoredSourceConfiguration =
+  | { kind: "rest_api"; baseUrl: string; credentialRef?: string }
+  | { kind: "json_file"; relativePath: string }
+  | { kind: "csv_file"; relativePath: string }
+  | { kind: "manual" };
+
+interface AssetsTable {
+  id: Generated<string>;
+  asset_key: string;
+  name: string;
+  asset_type: AssetType;
+  description: string | null;
+  parent_asset_id: string | null;
+  external_identifiers: ColumnType<ExternalIdentifier[], string, string>;
+  created_at: TimestampColumn;
+  updated_at: TimestampColumn;
+  archived_at: Date | null;
+}
+
+interface DataSourcesTable {
+  id: Generated<string>;
+  source_key: string;
+  display_name: string;
+  source_type: DataSourceType;
+  description: string | null;
+  configuration: ColumnType<StoredSourceConfiguration, string, string>;
+  enabled: boolean;
+  connection_status: Generated<ConnectorStatus>;
+  ingestion_status: Generated<ConnectorStatus>;
+  last_successful_sync_at: Date | null;
+  last_error_summary: string | null;
+  created_at: TimestampColumn;
+  updated_at: TimestampColumn;
+}
 
 export interface Database {
-  [tableName: string]: Record<string, unknown>;
+  assets: AssetsTable;
+  data_sources: DataSourcesTable;
 }
 
 export function createDatabase(connectionString: string): {

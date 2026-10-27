@@ -1,8 +1,12 @@
 # Data model
 
-The initial migration creates the `kudu` PostgreSQL schema and migration history table. No business entities are persisted yet.
+The initial migration creates the `kudu` PostgreSQL schema and migration history table. Additive migration `0002_asset_and_data_source_registries.sql` adds the first persisted registry entities.
 
-The planned first-release concepts are an asset registry, source registry, normalized events and measurements, source provenance, mapping proposals and published mappings, and a browsable unified namespace. Their relationships and retention rules need to be established before adding schema migrations.
+`kudu.assets` stores stable asset keys, names, types, descriptions, an optional parent link, external identifier pairs, timestamps, and archive state. Keys are unique case-insensitively. Parent deletion is restricted by a foreign key; parent changes are also checked for missing/archived parents and hierarchy cycles by the API.
+
+`kudu.data_sources` stores a stable key, display name, source type, descriptive metadata, type-specific JSON configuration, enablement, connection/ingestion state, timestamps, and last-sync/error metadata. REST configuration stores a URL and optional environment-variable reference, never a secret value. Public responses replace that reference with a boolean. File paths are metadata only; no file access or ingestion occurs.
+
+Normalized events and measurements, source provenance, mapping proposals, published mappings, and a browsable unified namespace remain future concepts; their relationships and retention rules must be defined before adding migrations.
 
 Data-model constraints for future work:
 

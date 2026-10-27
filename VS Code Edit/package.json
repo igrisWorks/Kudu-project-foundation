@@ -11,7 +11,7 @@
     "dev": "pnpm --filter @kudu/shared build && pnpm --parallel --stream --filter @kudu/backend --filter @kudu/frontend dev",
     "build": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/frontend build && pnpm --filter @kudu/backend build",
     "typecheck": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/shared typecheck && pnpm --filter @kudu/backend typecheck && pnpm --filter @kudu/frontend typecheck",
-    "test": "pnpm --filter @kudu/backend test",
+    "test": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/backend test",
     "start": "pnpm --filter @kudu/backend start",
     "db:up": "docker compose up -d db",
     "db:down": "docker compose stop db",

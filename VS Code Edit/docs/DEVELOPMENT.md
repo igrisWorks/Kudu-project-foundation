@@ -21,7 +21,7 @@ pnpm db:migrate
 pnpm dev
 ```
 
-`pnpm dev` starts the API and Vite frontend. Vite serves `http://localhost:5173` and proxies API calls to `http://localhost:3000`. The browser status panel reads the live health endpoint; it does not use demonstration data.
+`pnpm dev` starts the API and Vite frontend. Vite serves `http://localhost:5173` and proxies API calls to `http://localhost:3000`. The status panel reads the live health endpoint; registry pages read and write persisted API records, not demonstration data.
 
 ## Quality checks
 
@@ -32,6 +32,8 @@ pnpm build
 ```
 
 `pnpm db:up` and `pnpm db:down` start and stop only the Compose database. `pnpm db:migrate` applies pending migrations and requires a reachable database. It also builds the shared package and backend first.
+
+The default test command runs validation and existing unit tests. To run database migration and registry API integration tests against a disposable/local PostgreSQL database, set `KUDU_TEST_DATABASE_URL` and run `pnpm test`. The integration suite creates uniquely named records and removes them after the test; do not point it at production.
 
 ## Conventions
 

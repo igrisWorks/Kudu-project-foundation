@@ -22,7 +22,7 @@ The initial deployment target is Docker Compose on Ubuntu Linux LTS or Debian st
 
 5. Check `http://localhost:3000/api/v1/health` and open `http://localhost:3000`.
 
-The Compose file binds PostgreSQL to loopback only. The web application is published on port 3000; place it behind the site's network controls and TLS-terminating reverse proxy before exposing it to users. Configure firewall rules and backups to match the site's operational policy.
+The Compose file binds both PostgreSQL and the web application to loopback only. The API has no authentication or authorization, so this build must not be exposed to untrusted networks. A reverse proxy or TLS alone does not add access control. Keep it on a trusted local machine/network until authentication is implemented. Configure firewall rules and backups to match the site's operational policy.
 
 ## Operations
 
@@ -35,4 +35,4 @@ docker compose down
 
 `docker compose down` preserves the named database volume. `docker compose down -v` deletes it and permanently removes stored database data; do not use that command for routine shutdown.
 
-The initial package is not yet a hardened production product: authentication, authorization, backup automation, monitoring, and upgrade/rollback procedures must be designed before handling operational data or exposing it to an untrusted network. It performs no PLC writes.
+This package is not yet a hardened production product: authentication, authorization, backup automation, monitoring, and upgrade/rollback procedures must be designed before handling sensitive operational data or exposing it beyond loopback. Source registration does not connect, ingest, or perform PLC writes.
