@@ -4,6 +4,8 @@ import type {
   AssetType,
   ConnectorStatus,
   DataSourceType,
+  EventMappingStatus,
+  EventMappingValidationError,
   ExternalIdentifier,
   JsonObject,
 } from "@kudu/shared";
@@ -60,10 +62,24 @@ interface EventsTable {
   provenance: ColumnType<JsonObject, string, string>;
 }
 
+interface DataSourceEventMappingsTable {
+  id: Generated<string>;
+  source_id: string;
+  version: number;
+  status: EventMappingStatus;
+  definition: ColumnType<JsonObject, string, string>;
+  validation_errors: ColumnType<EventMappingValidationError[], string, string>;
+  validated_at: Date | null;
+  activated_at: Date | null;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+
 export interface Database {
   assets: AssetsTable;
   data_sources: DataSourcesTable;
   events: EventsTable;
+  data_source_event_mappings: DataSourceEventMappingsTable;
 }
 
 export function createDatabase(connectionString: string): {

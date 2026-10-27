@@ -9,6 +9,7 @@ import { checkDatabase } from "./database.js";
 import { ApiFailure } from "./errors.js";
 import { registerEventRoutes } from "./events.js";
 import { registerFileImportRoutes } from "./file-import.js";
+import { registerEventMappingRoutes } from "./event-mappings.js";
 import { registerRegistryRoutes } from "./registry.js";
 import type { Kysely } from "kysely";
 
@@ -120,6 +121,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
 
   registerRegistryRoutes(app, options.db);
   registerEventRoutes(app, options.db);
+  registerEventMappingRoutes(app, options.db);
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const importDirectory = resolve(
     projectRoot,

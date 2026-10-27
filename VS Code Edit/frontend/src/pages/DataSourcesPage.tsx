@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceRecord, type DataSourceType, type FileImportResult, type Page } from "@kudu/shared";
-import { ApiError, createDataSource, getDataSource, importDataSourceFile, listDataSources, updateDataSource } from "../api";
+import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page } from "@kudu/shared";
+import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
 import { ConnectorBadge, displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
 const PAGE_SIZE = 15;
@@ -145,7 +145,185 @@ function DataSourceDetailPage() {
           </dl></section>}
       </div>
     </div>
+    {fileFormat && <EventMappingPanel sourceId={id} />}
   </main>;
+}
+
+function EventMappingPanel({ sourceId }: { sourceId: string }) {
+  const [mappings, setMappings] = useState<DataSourceEventMapping[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [eventTypeField, setEventTypeField] = useState("");
+  const [occurredAtField, setOccurredAtField] = useState("");
+  const [sourceRecordIdField, setSourceRecordIdField] = useState("");
+  const [assetKeyField, setAssetKeyField] = useState("");
+  const [payloadMappingsText, setPayloadMappingsText] = useState("{}");
+
+  const loadMappings = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await listDataSourceEventMappings(sourceId);
+      setMappings(result.items);
+      const draft = result.items.find((mapping) => mapping.status === "draft");
+      if (draft) {
+        const definition = draft.definition as EventMappingDefinition;
+        setEventTypeField(typeof definition.eventType === "string" ? definition.eventType : "");
+        setOccurredAtField(typeof definition.occurredAt === "string" ? definition.occurredAt : "");
+        setSourceRecordIdField(typeof definition.sourceRecordId === "string" ? definition.sourceRecordId : "");
+        setAssetKeyField(typeof definition.assetKey === "string" ? definition.assetKey : "");
+        setPayloadMappingsText(JSON.stringify(definition.payload ?? {}, null, 2));
+      }
+      setDirty(false);
+    } catch (cause) {
+      setError(displayError(cause));
+    } finally {
+      setLoading(false);
+    }
+  }, [sourceId]);
+
+  useEffect(() => { void loadMappings(); }, [loadMappings]);
+
+  const activeMapping = mappings.find((mapping) => mapping.status === "active");
+  const draftMapping = mappings.find((mapping) => mapping.status === "draft");
+  const definitionFromForm = (): EventMappingDefinition => {
+    let parsedPayload: unknown;
+    try {
+      parsedPayload = JSON.parse(payloadMappingsText);
+    } catch {
+      throw new Error("Payload field mappings must be valid JSON.");
+    }
+    if (
+      typeof parsedPayload !== "object" ||
+      parsedPayload === null ||
+      Array.isArray(parsedPayload) ||
+      Object.values(parsedPayload).some((value) => typeof value !== "string")
+    ) {
+      throw new Error("Payload mappings must be a JSON object whose values are source field paths.");
+    }
+    return {
+      eventType: eventTypeField,
+      occurredAt: occurredAtField,
+      ...(sourceRecordIdField.trim() ? { sourceRecordId: sourceRecordIdField } : {}),
+      ...(assetKeyField.trim() ? { assetKey: assetKeyField } : {}),
+      payload: parsedPayload as Record<string, string>,
+    };
+  };
+
+  async function createDraft() {
+    setBusy(true); setError("");
+    try {
+      const definition = activeMapping
+        ? activeMapping.definition as EventMappingDefinition
+        : { eventType: "eventType", occurredAt: "occurredAt", sourceRecordId: "sourceRecordId", payload: {} };
+      await createDataSourceEventMapping(sourceId, definition);
+      await loadMappings();
+    } catch (cause) {
+      setError(displayError(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveDraft() {
+    if (!draftMapping) return;
+    setBusy(true); setError("");
+    try {
+      await updateDataSourceEventMapping(sourceId, draftMapping.version, definitionFromForm());
+      await loadMappings();
+    } catch (cause) {
+      setError(displayError(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function validateDraft() {
+    if (!draftMapping) return;
+    setBusy(true); setError("");
+    try {
+      const definition = definitionFromForm();
+      await updateDataSourceEventMapping(sourceId, draftMapping.version, definition);
+      const result = await validateDataSourceEventMapping(sourceId, draftMapping.version);
+      if (!result.valid) {
+        setError(`Mapping validation found ${result.errors.length} issue${result.errors.length === 1 ? "" : "s"}.`);
+      }
+      await loadMappings();
+    } catch (cause) {
+      setError(displayError(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function activateDraft() {
+    if (!draftMapping || dirty || !draftMapping.validatedAt || draftMapping.validationErrors.length > 0) return;
+    setBusy(true); setError("");
+    try {
+      await activateDataSourceEventMapping(sourceId, draftMapping.version);
+      await loadMappings();
+    } catch (cause) {
+      setError(displayError(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const setField = (setter: (value: string) => void) => (value: string) => {
+    setter(value);
+    setDirty(true);
+  };
+
+  return <section className="panel mapping-panel" data-testid="panel-event-mappings">
+    <div className="panel-heading-row">
+      <div>
+        <h2 className="panel-title">Event mapping</h2>
+        <p className="field-hint">Explicit field paths normalize new CSV/JSON imports. Prior events are never rewritten.</p>
+      </div>
+      {!draftMapping && <button className="button" type="button" onClick={() => void createDraft()} disabled={busy || loading} data-testid="button-create-mapping-draft">
+        {activeMapping ? "Create next version" : "Create mapping draft"}
+      </button>}
+    </div>
+    {loading && <p className="muted">Loading mapping versions…</p>}
+    {error && <div className="notice error" role="alert" data-testid="error-event-mapping">{error}</div>}
+    {!loading && <>
+      {activeMapping
+        ? <p data-testid="text-active-mapping">Active version {activeMapping.version}. Imports started after activation use this version; existing events are unchanged.</p>
+        : <p data-testid="text-no-active-mapping">No active mapping. File imports keep the existing field behavior.</p>}
+      <ul className="mapping-version-list" data-testid="list-mapping-versions">
+        {mappings.map((mapping) => <li key={mapping.id}>
+          <strong>v{mapping.version}</strong>
+          <span className={`status-pill ${mapping.status === "active" ? "good" : ""}`}>{mapping.status.toUpperCase()}</span>
+        </li>)}
+      </ul>
+      {draftMapping && <div className="mapping-draft" data-testid="mapping-draft-editor">
+        <h3>Draft version {draftMapping.version}</h3>
+        <p className="field-hint">Use source field names; nested JSON fields use dot paths such as <code>metadata.timestamp</code>.</p>
+        <div className="mapping-fields">
+          <label className="field"><span>Event type source field</span><input value={eventTypeField} onChange={(event) => setField(setEventTypeField)(event.target.value)} data-testid="input-mapping-event-type" /></label>
+          <label className="field"><span>Occurrence timestamp source field</span><input value={occurredAtField} onChange={(event) => setField(setOccurredAtField)(event.target.value)} data-testid="input-mapping-occurred-at" /></label>
+          <label className="field"><span>Source-record ID source field</span><input value={sourceRecordIdField} onChange={(event) => setField(setSourceRecordIdField)(event.target.value)} data-testid="input-mapping-source-record-id" /></label>
+          <label className="field"><span>Registered asset key source field</span><input value={assetKeyField} onChange={(event) => setField(setAssetKeyField)(event.target.value)} data-testid="input-mapping-asset-key" /></label>
+        </div>
+        <label className="field mapping-payload-field"><span>Payload output names and source paths</span>
+          <textarea rows={5} value={payloadMappingsText} onChange={(event) => { setPayloadMappingsText(event.target.value); setDirty(true); }} data-testid="textarea-mapping-payload" />
+        </label>
+        <p className="field-hint">Payload mappings are JSON, for example <code>{"{ \"temperatureC\": \"measurements.temp\" }"}</code>. Unknown and unmapped fields remain stored.</p>
+        {draftMapping.validationErrors.length > 0 && <ul className="mapping-validation-errors" role="alert" data-testid="list-mapping-validation-errors">
+          {draftMapping.validationErrors.map((item, index) => <li key={`${item.field}-${index}`}><strong>{item.field}:</strong> {item.message}</li>)}
+        </ul>}
+        {draftMapping.validatedAt && draftMapping.validationErrors.length === 0 && <p className="mapping-valid-message" data-testid="text-mapping-valid">Validated {formatDate(draftMapping.validatedAt)}.</p>}
+        <div className="mapping-actions">
+          <button className="button" type="button" onClick={() => void saveDraft()} disabled={busy} data-testid="button-save-mapping-draft">Save draft</button>
+          <button className="button" type="button" onClick={() => void validateDraft()} disabled={busy} data-testid="button-validate-mapping">Save and validate</button>
+          <button className="button button-primary" type="button" onClick={() => void activateDraft()} disabled={busy || dirty || !draftMapping.validatedAt || draftMapping.validationErrors.length > 0} data-testid="button-activate-mapping">Activate version {draftMapping.version}</button>
+        </div>
+      </div>}
+      {mappings.length === 0 && <p className="field-hint">Without an active mapping, imports use the current CSV/JSON field behavior.</p>}
+    </>}
+  </section>;
 }
 
 function DataSourceFormPage({ editing }: { editing: boolean }) {

@@ -216,6 +216,43 @@ export interface FileImportResult {
   errorsTruncated: boolean;
 }
 
+export type EventMappingStatus = "draft" | "active" | "retired";
+
+export interface EventMappingDefinition {
+  eventType?: string;
+  occurredAt?: string;
+  sourceRecordId?: string;
+  assetKey?: string;
+  payload?: Record<string, string>;
+}
+
+export interface EventMappingValidationError {
+  field: string;
+  message: string;
+}
+
+export interface DataSourceEventMapping {
+  id: string;
+  sourceId: string;
+  version: number;
+  status: EventMappingStatus;
+  definition: JsonObject;
+  validationErrors: EventMappingValidationError[];
+  validatedAt: string | null;
+  activatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventMappingValidationResult {
+  valid: boolean;
+  errors: EventMappingValidationError[];
+}
+
+export interface DataSourceEventMappingsResponse {
+  items: DataSourceEventMapping[];
+}
+
 export interface EventListFilters {
   sourceId?: string;
   assetId?: string;

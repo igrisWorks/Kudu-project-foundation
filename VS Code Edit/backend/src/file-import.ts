@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, realpath, type FileHandle } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
-import type { FileImportRecordError, FileImportResult, JsonObject } from "@kudu/shared";
+import { isDeepStrictEqual } from "node:util";
+import type { EventMappingDefinition, FileImportRecordError, FileImportResult, JsonObject } from "@kudu/shared";
 import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database, StoredSourceConfiguration } from "./database.js";
 import { ApiFailure } from "./errors.js";
+import { readMappedField, validateEventMappingDefinition } from "./event-mappings.js";
 import { ingestEvent } from "./events.js";
 
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
@@ -19,6 +21,16 @@ const jsonEventFields = csvEventFields;
 
 type ImportFormat = "csv" | "json";
 type JsonRecord = Record<string, unknown>;
+
+interface PreparedImportInput {
+  input: JsonRecord;
+  rawRecord: JsonObject;
+}
+
+interface ActiveEventMapping {
+  version: number;
+  definition: EventMappingDefinition;
+}
 
 interface CsvRow {
   line: number;
@@ -138,7 +150,7 @@ function parseCsvRows(text: string): CsvRow[] {
   return rows;
 }
 
-function parseCsv(text: string): { headers: string[]; rows: CsvRow[] } {
+function parseCsv(text: string, requireDefaultHeaders: boolean): { headers: string[]; rows: CsvRow[] } {
   const [headerRow, ...rows] = parseCsvRows(text);
   if (!headerRow || headerRow.values.length === 0 || headerRow.values.some((header) => header.length === 0)) {
     throw importFileFailure("The CSV file must start with a non-empty header row.");
@@ -147,9 +159,11 @@ function parseCsv(text: string): { headers: string[]; rows: CsvRow[] } {
   if (new Set(headers).size !== headers.length) {
     throw importFileFailure("The CSV header contains duplicate column names.");
   }
-  for (const required of ["eventType", "occurredAt", "payload"]) {
-    if (!headers.includes(required)) {
-      throw importFileFailure(`The CSV header must include ${required}.`);
+  if (requireDefaultHeaders) {
+    for (const required of ["eventType", "occurredAt", "payload"]) {
+      if (!headers.includes(required)) {
+        throw importFileFailure(`The CSV header must include ${required}.`);
+      }
     }
   }
   return { headers, rows };
@@ -188,7 +202,16 @@ function buildEventInput(
   record: JsonRecord,
   payloadValue: unknown,
   extraEntries: Array<[string, unknown]>,
-): JsonRecord {
+  allowMissingPayload: boolean,
+  payloadFieldPresent: boolean,
+): PreparedImportInput {
+  const effectivePayload = allowMissingPayload && payloadValue === undefined ? {} : payloadValue;
+  const payload = mergePayload(effectivePayload, extraEntries);
+  const rawRecord = {
+    ...record,
+    ...(payloadFieldPresent ? { payload: requirePayloadObject(effectivePayload) } : {}),
+    ...Object.fromEntries(extraEntries),
+  } as JsonObject;
   const sourceRecordId = record.sourceRecordId;
   const hasSourceRecordId = Object.hasOwn(record, "sourceRecordId");
   const deduplicationKey =
@@ -196,14 +219,114 @@ function buildEventInput(
       ? sourceRecordId
       : fallbackDeduplicationKey(relativePath, recordNumber);
   return {
-    sourceId,
-    eventType: record.eventType,
-    occurredAt: record.occurredAt,
-    ...(Object.hasOwn(record, "assetId") ? { assetId: record.assetId } : {}),
-    ...(hasSourceRecordId ? { sourceRecordId } : {}),
-    deduplicationKey,
-    payload: mergePayload(payloadValue, extraEntries),
-    provenance: { importFormat: format },
+    rawRecord,
+    input: {
+      sourceId,
+      eventType: record.eventType,
+      occurredAt: record.occurredAt,
+      ...(Object.hasOwn(record, "assetId") ? { assetId: record.assetId } : {}),
+      ...(hasSourceRecordId ? { sourceRecordId } : {}),
+      deduplicationKey,
+      payload,
+      provenance: { importFormat: format },
+    },
+  };
+}
+
+async function applyActiveMapping(
+  db: Kysely<Database>,
+  prepared: PreparedImportInput,
+  mapping: ActiveEventMapping,
+  format: ImportFormat,
+  recordNumber: number,
+  relativePath: string,
+): Promise<JsonRecord> {
+  const { definition, version } = mapping;
+  const eventType = readMappedField(prepared.rawRecord, definition.eventType!);
+  const occurredAt = readMappedField(prepared.rawRecord, definition.occurredAt!);
+  if (typeof eventType !== "string" || !eventType.trim()) {
+    throw recordFailure("The mapped event type is missing or is not a non-empty string.", {
+      eventType: `Provide a value in the mapped source field ${definition.eventType}.`,
+    });
+  }
+  if (typeof occurredAt !== "string" || !occurredAt.trim()) {
+    throw recordFailure("The mapped occurrence timestamp is missing or is not a non-empty string.", {
+      occurredAt: `Provide a value in the mapped source field ${definition.occurredAt}.`,
+    });
+  }
+
+  let sourceRecordId: string | undefined;
+  if (definition.sourceRecordId) {
+    const value = readMappedField(prepared.rawRecord, definition.sourceRecordId);
+    if (value !== undefined && value !== null && value !== "") {
+      if (typeof value !== "string") {
+        throw recordFailure("The mapped source-record ID must be a string.", {
+          sourceRecordId: "Provide a string value or leave the field blank.",
+        });
+      }
+      sourceRecordId = value;
+    }
+  }
+
+  let assetId: string | undefined;
+  if (definition.assetKey) {
+    const value = readMappedField(prepared.rawRecord, definition.assetKey);
+    if (value !== undefined && value !== null && value !== "") {
+      if (typeof value !== "string") {
+        throw recordFailure("The mapped asset key must be a string.", {
+          assetKey: "Provide an exact registered asset key or leave the field blank.",
+        });
+      }
+      const asset = await db
+        .selectFrom("assets")
+        .select(["id", "archived_at"])
+        .where("asset_key", "=", value)
+        .executeTakeFirst();
+      if (!asset || asset.archived_at !== null) {
+        throw recordFailure("The mapped asset key does not identify an active registered asset.", {
+          assetKey: "Use an exact active asset key from the registry.",
+        });
+      }
+      assetId = asset.id;
+    }
+  }
+
+  const payload = { ...(prepared.input.payload as JsonObject) };
+  for (const [target, sourcePath] of Object.entries(definition.payload ?? {})) {
+    const value = readMappedField(prepared.rawRecord, sourcePath);
+    if (value === undefined) {
+      throw recordFailure("A configured payload source field is missing.", {
+        [`payload.${target}`]: `Provide a value in the mapped source field ${sourcePath}.`,
+      });
+    }
+    if (Object.hasOwn(payload, target) && !isDeepStrictEqual(payload[target], value)) {
+      throw recordFailure("A mapped payload field conflicts with an existing payload value.", {
+        [`payload.${target}`]: "Rename the output field or remove the conflicting source payload key.",
+      });
+    }
+    Object.defineProperty(payload, target, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  const fallbackKey = fallbackDeduplicationKey(relativePath, recordNumber);
+  return {
+    sourceId: prepared.input.sourceId,
+    eventType,
+    occurredAt,
+    sourceTimestamp: occurredAt,
+    ...(assetId ? { assetId } : {}),
+    ...(sourceRecordId !== undefined ? { sourceRecordId } : {}),
+    deduplicationKey: sourceRecordId?.trim() ? sourceRecordId : fallbackKey,
+    payload,
+    provenance: {
+      importFormat: format,
+      mappingVersion: version,
+      originalRecord: prepared.rawRecord,
+    },
   };
 }
 
@@ -212,7 +335,8 @@ function csvRecordToEventInput(
   relativePath: string,
   headers: string[],
   row: CsvRow,
-): JsonRecord {
+  allowMissingPayload: boolean,
+): PreparedImportInput {
   if (row.values.length > headers.length) {
     throw recordFailure(
       "The CSV row contains more values than the header.",
@@ -255,6 +379,8 @@ function csvRecordToEventInput(
     record,
     payloadValue,
     extraEntries,
+    allowMissingPayload,
+    headers.includes("payload"),
   );
 }
 
@@ -263,7 +389,8 @@ function jsonRecordToEventInput(
   relativePath: string,
   recordValue: unknown,
   recordNumber: number,
-): JsonRecord {
+  allowMissingPayload: boolean,
+): PreparedImportInput {
   if (!isRecord(recordValue)) {
     throw recordFailure("Each JSON array item must be an object.", {
       record: "Provide an event object.",
@@ -278,6 +405,8 @@ function jsonRecordToEventInput(
     recordValue,
     recordValue.payload,
     extraEntries,
+    allowMissingPayload,
+    Object.hasOwn(recordValue, "payload"),
   );
 }
 
@@ -390,6 +519,7 @@ async function processImport(
   relativePath: string,
   format: ImportFormat,
   bytes: Buffer,
+  activeMapping?: ActiveEventMapping,
 ): Promise<FileImportResult> {
   let text: string;
   try {
@@ -398,12 +528,12 @@ async function processImport(
     throw importFileFailure("Import files must be valid UTF-8.");
   }
 
-  let inputs: Array<{ record: number; buildInput: () => JsonRecord }>;
+  let inputs: Array<{ record: number; buildInput: () => PreparedImportInput }>;
   if (format === "csv") {
-    const parsed = parseCsv(text);
+    const parsed = parseCsv(text, !activeMapping);
     inputs = parsed.rows.map((row) => ({
       record: row.line,
-      buildInput: () => csvRecordToEventInput(sourceId, relativePath, parsed.headers, row),
+      buildInput: () => csvRecordToEventInput(sourceId, relativePath, parsed.headers, row, Boolean(activeMapping)),
     }));
   } else {
     let parsed: unknown;
@@ -420,7 +550,7 @@ async function processImport(
     }
     inputs = parsed.map((record, index) => ({
       record: index + 1,
-      buildInput: () => jsonRecordToEventInput(sourceId, relativePath, record, index + 1),
+      buildInput: () => jsonRecordToEventInput(sourceId, relativePath, record, index + 1, Boolean(activeMapping)),
     }));
   }
 
@@ -436,7 +566,11 @@ async function processImport(
   };
   for (const item of inputs) {
     try {
-      const response = await ingestEvent(db, item.buildInput());
+      const prepared = item.buildInput();
+      const input = activeMapping
+        ? await applyActiveMapping(db, prepared, activeMapping, format, item.record, relativePath)
+        : prepared.input;
+      const response = await ingestEvent(db, input);
       if (response.duplicate) result.skipped += 1;
       else result.imported += 1;
     } catch (error) {
@@ -510,7 +644,24 @@ export function registerFileImportRoutes(
       }
       const filePath = await resolveImportFile(importDirectory, configuration.relativePath);
       const bytes = await readBoundedFile(filePath);
-      return processImport(db, source.id, configuration.relativePath, format, bytes);
+      const activeRow = await db
+        .selectFrom("data_source_event_mappings")
+        .select(["version", "definition"])
+        .where("source_id", "=", source.id)
+        .where("status", "=", "active")
+        .executeTakeFirst();
+      let activeMapping: ActiveEventMapping | undefined;
+      if (activeRow) {
+        const validation = validateEventMappingDefinition(activeRow.definition);
+        if (!validation.valid) {
+          throw new ApiFailure(409, "ACTIVE_MAPPING_INVALID", "The active event mapping failed validation.");
+        }
+        activeMapping = {
+          version: activeRow.version,
+          definition: activeRow.definition as unknown as EventMappingDefinition,
+        };
+      }
+      return processImport(db, source.id, configuration.relativePath, format, bytes, activeMapping);
     },
   );
 }

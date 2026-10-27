@@ -7,8 +7,12 @@ import type {
   DataSourceCreateInput,
   DataSourceEnabledFilter,
   DataSourceRecord,
+  DataSourceEventMapping,
+  DataSourceEventMappingsResponse,
   DataSourceType,
   DataSourceUpdateInput,
+  EventMappingDefinition,
+  EventMappingValidationResult,
   FileImportResult,
   EventDetail,
   EventListFilters,
@@ -146,6 +150,49 @@ export function updateDataSource(
 
 export function importDataSourceFile(id: string): Promise<FileImportResult> {
   return request(`/api/v1/data-sources/${encodeURIComponent(id)}/import`, {
+    method: "POST",
+  });
+}
+
+export function listDataSourceEventMappings(id: string): Promise<DataSourceEventMappingsResponse> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}/mappings`);
+}
+
+export function createDataSourceEventMapping(
+  id: string,
+  definition: EventMappingDefinition,
+): Promise<{ mapping: DataSourceEventMapping }> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}/mappings`, {
+    method: "POST",
+    body: JSON.stringify({ definition }),
+  });
+}
+
+export function updateDataSourceEventMapping(
+  id: string,
+  version: number,
+  definition: EventMappingDefinition,
+): Promise<{ mapping: DataSourceEventMapping }> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}/mappings/${version}`, {
+    method: "PUT",
+    body: JSON.stringify({ definition }),
+  });
+}
+
+export function validateDataSourceEventMapping(
+  id: string,
+  version: number,
+): Promise<{ mapping: DataSourceEventMapping } & EventMappingValidationResult> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}/mappings/${version}/validate`, {
+    method: "POST",
+  });
+}
+
+export function activateDataSourceEventMapping(
+  id: string,
+  version: number,
+): Promise<{ mapping: DataSourceEventMapping }> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}/mappings/${version}/activate`, {
     method: "POST",
   });
 }

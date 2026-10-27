@@ -97,14 +97,14 @@ The route reads the source's registered `configuration.relativePath` beneath `KU
 
 The default local import directory is `imports/` at the project root. In Docker Compose, the host directory defaults to `./imports` and is mounted read-only at `/imports`. Configure `KUDU_IMPORT_DIRECTORY` for direct local runs, and `KUDU_IMPORT_HOST_DIRECTORY` to change the Compose host directory.
 
-Files must be UTF-8, no larger than 5 MiB, and contain at most 1,000 records. CSV files require headers `eventType`, `occurredAt`, and `payload`; optional headers are `assetId` and `sourceRecordId`. The `payload` cell is a JSON object (or blank for an empty object). Other columns are preserved as string fields inside the event payload; a field that collides with a payload key fails that record. Quoted CSV fields support commas, newlines, and escaped quotes.
+Files must be UTF-8, no larger than 5 MiB, and contain at most 1,000 records. Without an active mapping, CSV files require headers `eventType`, `occurredAt`, and `payload`; optional headers are `assetId` and `sourceRecordId`. The `payload` cell is a JSON object (or blank for an empty object). Other columns are preserved as string fields inside the event payload; a field that collides with a payload key fails that record. With an active mapping, any unique, non-empty headers are allowed and the `payload` column is optional. Quoted CSV fields support commas, newlines, and escaped quotes.
 
 ```csv
 eventType,occurredAt,sourceRecordId,payload,station
 alarm.raised,2026-10-27T12:00:00Z,row-001,"{""code"":""E-7""}",press-2
 ```
 
-JSON files contain an array of event objects with the same mapped fields. Unknown top-level keys are merged into `payload`; duplicate keys between those fields and `payload` fail the record instead of overwriting data.
+JSON files contain an array of event objects with the same default fields. Without an active mapping, unknown top-level keys are merged into `payload`; duplicate keys between those fields and `payload` fail the record instead of overwriting data. An active mapping may read selected fields directly from the source object and does not require a `payload` object.
 
 ```json
 [
@@ -119,6 +119,36 @@ JSON files contain an array of event objects with the same mapped fields. Unknow
 ```
 
 Each valid record is sent through the normal event validation, reference checks, and source-scoped deduplication path. `sourceRecordId` is used as the deduplication key when present. Otherwise, the key is derived from the configured relative path and CSV line or JSON array position, making an unchanged repeat import deterministic. A duplicate increments `skipped`; invalid records and conflicting key reuse increment `failed`. The response reports `records`, `imported`, `skipped`, and `failed`, plus up to 100 record/line errors. Results are returned per request; import history is not stored.
+
+### Versioned event mappings
+
+| Method | Route | Behavior |
+|---|---|---|
+| `GET` | `/api/v1/data-sources/{id}/mappings` | Inspect mapping versions and their draft/active/retired status. |
+| `POST` | `/api/v1/data-sources/{id}/mappings` | Create the next draft version. Only one draft per source is allowed. |
+| `PUT` | `/api/v1/data-sources/{id}/mappings/{version}` | Replace a draft definition; this clears prior validation. |
+| `POST` | `/api/v1/data-sources/{id}/mappings/{version}/validate` | Validate the definition and save any errors. |
+| `POST` | `/api/v1/data-sources/{id}/mappings/{version}/activate` | Activate a validated draft and retire the previously active version. |
+
+Mappings are available only for registered CSV and JSON file sources. A definition selects source field paths for required event type and occurrence timestamp, optional source-record ID and asset key, and optional payload output fields. Nested JSON paths use dot notation; array indexing and value transformations are not supported.
+
+```json
+{
+  "definition": {
+    "eventType": "kind",
+    "occurredAt": "metadata.time",
+    "sourceRecordId": "record_id",
+    "assetKey": "machine_key",
+    "payload": {
+      "temperatureC": "measurements.temp_c"
+    }
+  }
+}
+```
+
+The `assetKey` rule resolves only an exact active `asset_key` already in the asset registry; names, IP addresses, and fuzzy matches are never used. Each import with an active mapping stores the mapping version and the original source record in event provenance. The occurrence time is normalized to UTC by event ingestion while its original text is retained as `sourceTimestamp`. Unmapped fields remain in payload; mapped payload outputs are added without silently overwriting different existing values. Missing required mapped fields or unregistered asset keys fail that record. Validation checks the mapping definition; record-specific missing values are reported during import.
+
+Activation changes interpretation only for imports started afterward. Existing events are not rewritten. Mapping version is retained in provenance, and source-scoped deduplication remains in effect: reusing a source-record ID with changed normalized content is a conflict, not an update. If no mapping is active, the existing CSV/JSON import behavior is unchanged. Mapping writes, like other API writes, are unauthenticated; keep the application loopback-only until access controls are implemented.
 
 ### Events
 

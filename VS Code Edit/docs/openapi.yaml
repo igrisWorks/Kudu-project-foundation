@@ -265,7 +265,9 @@ paths:
         KUDU_IMPORT_DIRECTORY. The request has no body and accepts no
         filesystem path. Only CSV and JSON file sources are supported.
         Identical repeated records use the normal event ingestion and
-        source-scoped deduplication behavior.
+        source-scoped deduplication behavior. An active mapping is applied
+        before ingestion; without one, the documented default field mapping
+        remains in effect.
       responses:
         "200":
           description: Import completed; the result includes imported, skipped, and failed record counts.
@@ -281,6 +283,136 @@ paths:
           $ref: "#/components/responses/Conflict"
         "413":
           description: File size or record-count limit exceeded.
+  /api/v1/data-sources/{id}/mappings:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [Data sources]
+      operationId: listDataSourceEventMappings
+      summary: Inspect mapping versions for a file source
+      responses:
+        "200":
+          description: Mapping versions, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSourceEventMappingsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [Data sources]
+      operationId: createDataSourceEventMapping
+      summary: Create the next mapping draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventMappingWrite"
+      responses:
+        "201":
+          description: Mapping draft created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSourceEventMappingResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          description: Mapping definition exceeds the size limit.
+  /api/v1/data-sources/{id}/mappings/{version}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    put:
+      tags: [Data sources]
+      operationId: updateDataSourceEventMapping
+      summary: Update a mapping draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventMappingWrite"
+      responses:
+        "200":
+          description: Updated draft; prior validation is cleared.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSourceEventMappingResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          description: Mapping definition exceeds the size limit.
+  /api/v1/data-sources/{id}/mappings/{version}/validate:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    post:
+      tags: [Data sources]
+      operationId: validateDataSourceEventMapping
+      summary: Validate a mapping draft
+      description: Validates the definition structure and source-field path syntax; individual record values are checked during import.
+      responses:
+        "200":
+          description: Validation result with errors, if any.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventMappingValidationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/data-sources/{id}/mappings/{version}/activate:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    post:
+      tags: [Data sources]
+      operationId: activateDataSourceEventMapping
+      summary: Activate a validated mapping draft
+      responses:
+        "200":
+          description: Activated mapping; the previous active version is retired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSourceEventMappingResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/events:
     get:
       tags: [Events]
@@ -1014,3 +1146,100 @@ components:
             $ref: "#/components/schemas/FileImportRecordError"
         errorsTruncated:
           type: boolean
+    EventMappingWrite:
+      type: object
+      required: [definition]
+      additionalProperties: false
+      properties:
+        definition:
+          $ref: "#/components/schemas/EventMappingDefinition"
+    EventMappingDefinition:
+      type: object
+      additionalProperties: false
+      description: Draft definitions may be incomplete; validation is required before activation.
+      properties:
+        eventType:
+          type: string
+          description: Source field path for the required event type.
+        occurredAt:
+          type: string
+          description: Source field path for the required occurrence timestamp.
+        sourceRecordId:
+          type: string
+          description: Optional source field path for the record ID.
+        assetKey:
+          type: string
+          description: Optional source field path containing an exact registered asset key.
+        payload:
+          type: object
+          additionalProperties:
+            type: string
+          description: Maps output payload names to source field paths.
+    EventMappingValidationError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+    DataSourceEventMapping:
+      type: object
+      required: [id, sourceId, version, status, definition, validationErrors, validatedAt, activatedAt, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [draft, active, retired]
+        definition:
+          $ref: "#/components/schemas/EventMappingDefinition"
+        validationErrors:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventMappingValidationError"
+        validatedAt:
+          type: [string, "null"]
+          format: date-time
+        activatedAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    DataSourceEventMappingsResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DataSourceEventMapping"
+    DataSourceEventMappingResponse:
+      type: object
+      required: [mapping]
+      properties:
+        mapping:
+          $ref: "#/components/schemas/DataSourceEventMapping"
+    EventMappingValidationResponse:
+      allOf:
+        - $ref: "#/components/schemas/DataSourceEventMappingResponse"
+        - type: object
+          required: [valid, errors]
+          properties:
+            valid:
+              type: boolean
+            errors:
+              type: array
+              items:
+                $ref: "#/components/schemas/EventMappingValidationError"

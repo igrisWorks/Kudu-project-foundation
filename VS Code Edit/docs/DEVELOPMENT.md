@@ -53,6 +53,15 @@ KUDU_TEST_DATABASE_URL=postgresql://... node --import tsx --test src/file-import
 
 The focused tests cover CSV and JSON mapping, partial record failures, repeated imports, unsupported/disabled sources, path containment, malformed input, and size/count limits. Test files are created in temporary directories and removed afterward.
 
+Versioned mapping checks use the same disposable/local database:
+
+```sh
+cd backend
+KUDU_TEST_DATABASE_URL=postgresql://... node --import tsx --test src/event-mappings.integration.test.ts
+```
+
+The focused mapping tests cover CSV and JSON field selection, activation/version history, normalized records, preserved payload/provenance, validation failures, and unchanged imports when no mapping is active. The additive `0004_data_source_event_mappings.sql` migration is applied by the existing migration runner.
+
 ## Conventions
 
 - Keep runtime features in this directory, not in the Replit wrapper.
