@@ -14,6 +14,7 @@ import {
 } from "../components/RegistryUI";
 
 const PAGE_SIZE = 20;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function localTimeToUtc(value: string): string | undefined {
   if (!value) return undefined;
@@ -197,6 +198,14 @@ function EventsListPage() {
 
 function EventDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
+  const requestedNamespaceAssetId = new URLSearchParams(window.location.search).get("namespaceAssetId");
+  const namespaceAssetId = requestedNamespaceAssetId && UUID_PATTERN.test(requestedNamespaceAssetId)
+    ? requestedNamespaceAssetId
+    : null;
+  const returnHref = namespaceAssetId
+    ? `/namespace?assetId=${encodeURIComponent(namespaceAssetId)}`
+    : "/events";
+  const returnLabel = namespaceAssetId ? "← Unified Namespace" : "← All events";
   const [record, setRecord] = useState<EventDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -220,7 +229,7 @@ function EventDetailPage() {
         title="Event unavailable"
         message={error || "The requested event was not returned by the API."}
         retry={() => setAttempt(value => value + 1)}
-        back="/events"
+        back={returnHref}
       />
     </main>;
   }
@@ -228,7 +237,7 @@ function EventDetailPage() {
   return (
     <main className="page-main">
       <div className="detail-heading">
-        <Link href="/events" className="back-link" data-testid="link-back-events">← All events</Link>
+        <Link href={returnHref} className="back-link" data-testid="link-back-events">{returnLabel}</Link>
         <PageIntro eyebrow="EVENT RECORD" title={record.eventType} description="Persisted event data and source provenance; records are read-only in this view." />
       </div>
       <div className="detail-grid">
@@ -239,7 +248,7 @@ function EventDetailPage() {
             <dt>Occurred at · UTC</dt><dd className="time-label" data-testid="text-event-occurred-at">{formatDate(record.occurredAt)}</dd>
             <dt>Ingested at · UTC</dt><dd className="time-label">{formatDate(record.ingestedAt)}</dd>
             <dt>Event type</dt><dd className="mono">{record.eventType}</dd>
-            <dt>Source</dt><dd><Link className="record-link" href={`/data-sources/${encodeURIComponent(record.source.id)}`} data-testid="link-detail-event-source">{record.source.sourceKey} · {record.source.displayName}</Link></dd>
+            <dt>Source</dt><dd><Link className="record-link" href={`/data-sources/${encodeURIComponent(record.source.id)}${namespaceAssetId ? `?namespaceAssetId=${encodeURIComponent(namespaceAssetId)}` : ""}`} data-testid="link-detail-event-source">{record.source.sourceKey} · {record.source.displayName}</Link></dd>
             <dt>Source record ID</dt><dd className="mono">{record.sourceRecordId ?? "Not provided"}</dd>
             <dt>Original source timestamp</dt><dd className="mono" data-testid="text-event-source-timestamp">{record.sourceTimestamp}</dd>
             <dt>Deduplication key</dt><dd className="mono">{record.deduplicationKey ?? "Not provided"}</dd>

@@ -6,6 +6,7 @@ import { activateDataSourceEventMapping, ApiError, createDataSource, createDataS
 import { ConnectorBadge, displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
 const PAGE_SIZE = 15;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sourceLabels: Record<DataSourceType, string> = {
   rest_api: "REST API", json_file: "JSON file", csv_file: "CSV file", manual: "Manual",
 };
@@ -70,6 +71,14 @@ function DataSourceListPage() {
 
 function DataSourceDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
+  const requestedNamespaceAssetId = new URLSearchParams(window.location.search).get("namespaceAssetId");
+  const namespaceAssetId = requestedNamespaceAssetId && UUID_PATTERN.test(requestedNamespaceAssetId)
+    ? requestedNamespaceAssetId
+    : null;
+  const returnHref = namespaceAssetId
+    ? `/namespace?assetId=${encodeURIComponent(namespaceAssetId)}`
+    : "/data-sources";
+  const returnLabel = namespaceAssetId ? "← Unified Namespace" : "← All data sources";
   const [record, setRecord] = useState<DataSourceRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -98,12 +107,12 @@ function DataSourceDetailPage() {
     finally { setSyncing(false); }
   }
   if (loading) return <main className="page-main"><LoadingState label="Loading the actual data source record…" /></main>;
-  if (error || !record) return <main className="page-main"><ErrorState title="Data source unavailable" message={error || "The requested source was not returned by the API."} retry={() => void load()} back="/data-sources" /></main>;
+  if (error || !record) return <main className="page-main"><ErrorState title="Data source unavailable" message={error || "The requested source was not returned by the API."} retry={() => void load()} back={returnHref} /></main>;
   const cfg = record.configuration;
   const fileFormat = record.sourceType === "csv_file" ? "CSV" : record.sourceType === "json_file" ? "JSON" : null;
   const isRestSource = record.sourceType === "rest_api" && cfg.kind === "rest_api";
   return <main className="page-main">
-    <div className="detail-heading"><Link href="/data-sources" className="back-link" data-testid="link-back-data-sources">← All data sources</Link>
+    <div className="detail-heading"><Link href={returnHref} className="back-link" data-testid="link-back-data-sources">{returnLabel}</Link>
       <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />DATA SOURCE RECORD</div><h1>{record.displayName}</h1><span className="detail-key" data-testid="text-data-source-key">{record.sourceKey}</span></div>
         <div className="detail-actions">
           {fileFormat && record.enabled && <button className="button button-primary" type="button" onClick={() => void runFileImport()} disabled={importing} data-testid="button-import-source-file">{importing ? "Importing…" : `Import configured ${fileFormat} file`}</button>}

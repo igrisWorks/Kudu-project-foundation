@@ -129,6 +129,11 @@ paths:
             type: string
             enum: [active, archived, all]
             default: active
+        - name: assetType
+          in: query
+          description: Filter by registered asset type.
+          schema:
+            $ref: "#/components/schemas/AssetType"
       responses:
         "200":
           description: A stable, key-ordered page of assets.

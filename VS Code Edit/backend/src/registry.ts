@@ -1,17 +1,18 @@
-import type {
-  AssetChildSummary,
-  AssetDetail,
-  AssetParentSummary,
-  AssetRecord,
-  AssetStatusFilter,
-  AssetType,
-  DataSourceConfigurationInput,
-  DataSourceConfigurationMetadata,
-  DataSourceEnabledFilter,
-  DataSourceRecord,
-  DataSourceType,
-  ExternalIdentifier,
-  Page,
+import {
+  ASSET_TYPES,
+  type AssetChildSummary,
+  type AssetDetail,
+  type AssetParentSummary,
+  type AssetRecord,
+  type AssetStatusFilter,
+  type AssetType,
+  type DataSourceConfigurationInput,
+  type DataSourceConfigurationMetadata,
+  type DataSourceEnabledFilter,
+  type DataSourceRecord,
+  type DataSourceType,
+  type ExternalIdentifier,
+  type Page,
 } from "@kudu/shared";
 import type { FastifyInstance } from "fastify";
 import { sql, type Kysely } from "kysely";
@@ -133,6 +134,15 @@ function assetStatusFilter(query: unknown): AssetStatusFilter {
     throw new ApiFailure(400, "INVALID_QUERY", "Status must be active, archived, or all.");
   }
   return status;
+}
+
+function assetTypeFilter(query: unknown): AssetType | undefined {
+  const assetType = queryString(query, "assetType");
+  if (assetType === undefined || assetType === "") return undefined;
+  if (!ASSET_TYPES.includes(assetType as AssetType)) {
+    throw new ApiFailure(400, "INVALID_QUERY", "Asset type is not supported.");
+  }
+  return assetType as AssetType;
 }
 
 function dataSourceTypeFilter(query: unknown): DataSourceType | undefined {
@@ -324,6 +334,7 @@ async function listAssets(
 ): Promise<Page<AssetRecord>> {
   const { search, page, pageSize } = listParameters(query);
   const status = assetStatusFilter(query);
+  const assetType = assetTypeFilter(query);
   let rowsQuery = db
     .selectFrom("assets as a")
     .leftJoin("assets as p", "p.id", "a.parent_asset_id")
@@ -336,6 +347,10 @@ async function listAssets(
   } else if (status === "archived") {
     rowsQuery = rowsQuery.where("a.archived_at", "is not", null);
     countQuery = countQuery.where("archived_at", "is not", null);
+  }
+  if (assetType) {
+    rowsQuery = rowsQuery.where("a.asset_type", "=", assetType);
+    countQuery = countQuery.where("asset_type", "=", assetType);
   }
   if (search) {
     const pattern = searchPattern(search);

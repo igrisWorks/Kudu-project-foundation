@@ -15,6 +15,7 @@ export default function AppShell({ children, onLogout }: { children: ReactNode; 
         <Link href="/assets" aria-current={location.startsWith("/assets") ? "page" : undefined} data-testid="nav-assets"><span className="nav-glyph" aria-hidden="true">02</span>Assets</Link>
         <Link href="/data-sources" aria-current={location.startsWith("/data-sources") ? "page" : undefined} data-testid="nav-data-sources"><span className="nav-glyph" aria-hidden="true">03</span>Data sources</Link>
         <Link href="/events" aria-current={location.startsWith("/events") ? "page" : undefined} data-testid="nav-events"><span className="nav-glyph" aria-hidden="true">04</span>Events</Link>
+        <Link href="/namespace" aria-current={location === "/namespace" ? "page" : undefined} data-testid="nav-namespace"><span className="nav-glyph" aria-hidden="true">05</span>Unified Namespace</Link>
       </nav>
       <div className="rail-bottom">
         <div className="environment"><span className="environment-dot" /> PRIVATE REGISTRY</div>

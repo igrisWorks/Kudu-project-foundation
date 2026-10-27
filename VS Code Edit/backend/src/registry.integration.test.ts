@@ -137,6 +137,21 @@ test(
     assert.equal(secondPage.json().items.length, 1);
     assert.notEqual(firstPage.json().items[0].id, secondPage.json().items[0].id);
 
+    const plcAssetsResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets?search=${prefix}&status=all&assetType=plc`,
+    });
+    assert.equal(plcAssetsResponse.statusCode, 200);
+    assert.equal(plcAssetsResponse.json().total, 1);
+    assert.equal(plcAssetsResponse.json().items[0].id, child.id);
+
+    const invalidAssetTypeResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets?search=${prefix}&status=all&assetType=robot`,
+    });
+    assert.equal(invalidAssetTypeResponse.statusCode, 400);
+    assert.equal(invalidAssetTypeResponse.json().error.code, "INVALID_QUERY");
+
     const detailResponse = await app.inject({
       method: "GET",
       url: `/api/v1/assets/${parent.id}`,

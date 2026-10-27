@@ -4,6 +4,7 @@ import type {
   AssetDetail,
   AssetRecord,
   AssetStatusFilter,
+  AssetType,
   AssetUpdateInput,
   DataSourceCreateInput,
   DataSourceEnabledFilter,
@@ -148,11 +149,11 @@ export function getHealth() {
 }
 
 export function listAssets(
-  query: ListQuery & { status?: AssetStatusFilter },
+  query: ListQuery & { status?: AssetStatusFilter; assetType?: AssetType },
 ): Promise<Page<AssetRecord>> {
-  return request(
-    listPath("assets", query, { status: query.status ?? "active" }),
-  );
+  const extra: Record<string, string> = { status: query.status ?? "active" };
+  if (query.assetType) extra.assetType = query.assetType;
+  return request(listPath("assets", query, extra));
 }
 
 export function getAsset(id: string): Promise<AssetDetail> {
