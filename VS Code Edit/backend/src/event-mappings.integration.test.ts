@@ -50,7 +50,7 @@ async function createFixture(context: TestLifecycle) {
       method: "POST",
       url: "/api/v1/data-sources",
       payload: {
-        sourceKey: `${prefix}-source`,
+        sourceKey: `${prefix}-source-${sourceIds.length + 1}`,
         displayName: "Event mapping integration source",
         sourceType,
         configuration: { kind: sourceType, relativePath },
@@ -316,5 +316,21 @@ test(
     assert.equal(detail.asset.id, asset.id);
     assert.deepEqual(detail.payload, { state: "ready", lineName: "press-9" });
     assert.deepEqual(detail.provenance, { importFormat: "json" });
+
+    const csvSourceId = await addSource("plant/default.csv", "csv_file");
+    const payloadCell = JSON.stringify({ state: "ready" }).replaceAll('"', '""');
+    await writeFile(
+      join(importDirectory, "plant/default.csv"),
+      `eventType,occurredAt,sourceRecordId,payload,lineName\r\nstate.changed,2026-10-27T12:05:00Z,csv-default-row,"${payloadCell}",press-8`,
+      "utf8",
+    );
+    const csvImport = await app.inject({ method: "POST", url: `/api/v1/data-sources/${csvSourceId}/import` });
+    assert.equal(csvImport.statusCode, 200, csvImport.body);
+    assert.equal(csvImport.json().imported, 1);
+    const csvList = await app.inject({ method: "GET", url: `/api/v1/events?sourceId=${csvSourceId}` });
+    const csvEvent = csvList.json().items[0] as { id: string };
+    const csvDetail = (await app.inject({ method: "GET", url: `/api/v1/events/${csvEvent.id}` })).json();
+    assert.deepEqual(csvDetail.payload, { state: "ready", lineName: "press-8" });
+    assert.deepEqual(csvDetail.provenance, { importFormat: "csv" });
   },
 );

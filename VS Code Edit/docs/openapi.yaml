@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   summary: Asset and data-source registry API
   description: |
-    Versioned API for Kudu's registries, event ingestion, and CSV/JSON file imports.
+    Versioned API for Kudu's registries, event ingestion, CSV/JSON imports, and source event mappings.
 
     Data-source registration stores metadata only. Kudu does not connect to
     REST endpoints, read files, or ingest data. REST credential references are
@@ -1155,8 +1155,8 @@ components:
           $ref: "#/components/schemas/EventMappingDefinition"
     EventMappingDefinition:
       type: object
-      additionalProperties: false
-      description: Draft definitions may be incomplete; validation is required before activation.
+      additionalProperties: true
+      description: Draft definitions may be incomplete or contain unsupported properties; validation is required before activation.
       properties:
         eventType:
           type: string

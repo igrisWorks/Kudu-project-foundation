@@ -642,8 +642,6 @@ export function registerFileImportRoutes(
           `The registered ${format.toUpperCase()} source must reference a ${expectedExtension} file.`,
         );
       }
-      const filePath = await resolveImportFile(importDirectory, configuration.relativePath);
-      const bytes = await readBoundedFile(filePath);
       const activeRow = await db
         .selectFrom("data_source_event_mappings")
         .select(["version", "definition"])
@@ -661,6 +659,8 @@ export function registerFileImportRoutes(
           definition: activeRow.definition as unknown as EventMappingDefinition,
         };
       }
+      const filePath = await resolveImportFile(importDirectory, configuration.relativePath);
+      const bytes = await readBoundedFile(filePath);
       return processImport(db, source.id, configuration.relativePath, format, bytes, activeMapping);
     },
   );
