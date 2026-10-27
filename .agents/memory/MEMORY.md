@@ -1,0 +1,1 @@
+- [Docker runtime checks](docker-runtime-checks.md) — this workspace can run PostgreSQL containers while blocking container exec and exec-based health checks.

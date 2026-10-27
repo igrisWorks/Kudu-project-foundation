@@ -1,45 +1,22 @@
-# [Project name]
+# Kudu
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+An on-premises industrial data platform foundation for unifying existing applications, signals, and events.
 
-## Run & Operate
+## Source of truth
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- The complete, portable Kudu application lives in `VS Code Edit/`. Make all frontend, backend, shared-contract, database, script, and product-documentation changes there.
+- Do not implement Kudu features in root `artifacts/`, `lib/`, or other workspace template packages. Keep Replit-specific configuration minimal and limited to invoking the portable source where needed.
+- A developer receiving only `VS Code Edit/` must be able to install, run, build, test, migrate, and deploy the application without Replit.
+- Do not introduce cloud dependencies, external runtime services, or PLC-write operations.
 
-## Stack
+## Run & operate
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+Run commands from `VS Code Edit/`; follow its `README.md` and `docs/DEVELOPMENT.md`.
 
-## Where things live
+- Runtime: Node.js 24 LTS and pnpm 10.26.1.
+- Frontend: React, TypeScript, Vite.
+- Backend: Fastify, TypeScript.
+- Database: PostgreSQL with Kysely and versioned SQL migrations.
+- Deployment: Docker Compose for Ubuntu Linux LTS and Debian stable.
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
-
-## Architecture decisions
-
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
-
-## User preferences
-
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+Update the relevant documentation in `VS Code Edit/docs/` whenever APIs, schema, configuration, commands, deployment, or architecture change.

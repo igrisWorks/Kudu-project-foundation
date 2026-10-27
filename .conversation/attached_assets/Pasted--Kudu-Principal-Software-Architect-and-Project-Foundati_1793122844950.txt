@@ -1,0 +1,230 @@
+# Kudu — Principal Software Architect and Project Foundation
+
+You are the principal software architect and lead engineer for a product called Kudu.
+
+Your task is to build a minimalistic, robust, maintainable industrial data platform with a clean UI, a solid backend, and a portable codebase that another developer can continue developing independently using Visual Studio Code.
+
+## 1. Mandatory project structure
+
+From the very beginning of the project, create and maintain a directory named exactly:
+
+`VS Code Edit/`
+
+This directory is the primary developer handoff and portable application directory. It must contain the actual, runnable Kudu application code—not merely documentation, copied snippets, generated summaries, or links to code located elsewhere in the repository.
+
+The project may contain additional files and directories required by Replit, build tooling, dependencies, or development workflows. However, the complete application source code needed to build, run, debug, and extend Kudu must be maintained inside `VS Code Edit/`.
+
+Use this initial structure as the preferred starting point:
+
+VS Code Edit/
+- frontend/
+  - src/
+  - public/
+  - package.json
+  - TypeScript and build configuration
+- backend/
+  - src/
+  - package.json
+  - TypeScript and runtime configuration
+- shared/
+  - src/
+  - Shared domain types and API contracts
+- database/
+  - migrations/
+  - seed/
+- docs/
+  - README.md
+  - ARCHITECTURE.md
+  - DEVELOPMENT.md
+  - DEPLOYMENT.md
+  - API.md
+  - DATA_MODEL.md
+  - CHANGELOG.md
+- scripts/
+  - Development, validation, and operational scripts
+- docker-compose.yml
+- .env.example
+- .gitignore
+- package.json
+- README.md
+
+Adjust this structure only when there is a concrete technical reason. Keep it straightforward. Do not create empty directories, unnecessary abstraction layers, or large numbers of trivial files just to make the repository appear enterprise-grade.
+
+## 2. Source-of-truth rule
+
+`VS Code Edit/` must remain the authoritative home for all key application source code.
+
+- Implement frontend features directly inside `VS Code Edit/frontend/`.
+- Implement backend features directly inside `VS Code Edit/backend/`.
+- Keep shared contracts and domain types inside `VS Code Edit/shared/`.
+- Keep database migrations and seed tooling inside `VS Code Edit/database/`.
+- Keep developer and deployment documentation inside `VS Code Edit/docs/`.
+- Keep the runnable entry points, dependency manifests, and scripts inside `VS Code Edit/`.
+
+Do not implement a feature elsewhere and leave a stale copy inside `VS Code Edit/`.
+
+Do not maintain two independently editable copies of the frontend, backend, or database code.
+
+If Replit requires additional root-level configuration, wrappers, or metadata, keep those files minimal. They must invoke or configure the authoritative code inside `VS Code Edit/`, rather than introducing another implementation.
+
+If a Replit-specific feature cannot be moved inside this directory, document the exception and ensure the portable application remains independent of it.
+
+## 3. Developer handoff is a core requirement
+
+Assume a new developer receives only the contents of `VS Code Edit/`.
+
+That developer must be able to:
+1. Open the directory in VS Code.
+2. Understand the architecture and project conventions.
+3. Install the required dependencies.
+4. Configure the application using the documented environment variables.
+5. Start the frontend, backend, and database.
+6. Run migrations.
+7. Run type checks, builds, and relevant tests.
+8. Debug the application locally.
+9. Add a new feature or connector without relying on Replit.
+10. Build a deployment package for an on-premises Linux server.
+
+Do not rely on hidden Replit state, undocumented secrets, external development services, or Replit-only execution commands.
+
+Provide exact, tested commands in the documentation. Clearly state the required Node.js version, package manager, PostgreSQL version, and other runtime prerequisites. Pin dependencies through lockfiles.
+
+## 4. Target deployment platforms
+
+Kudu is intended primarily for on-premises industrial environments.
+
+The first supported deployment targets are:
+- Ubuntu Linux LTS.
+- Debian stable.
+
+Use portable Linux-compatible code and dependencies. Avoid assumptions about a particular home directory, operating system user, absolute filesystem path, or Replit filesystem layout.
+
+Prefer Docker Compose for a reproducible initial deployment, while also documenting the runtime requirements and configuration.
+
+Keep operating-system-specific setup in scripts or documentation where necessary. Avoid unnecessary dependencies on system packages.
+
+Design the application so it can later be adapted to other Linux distributions without rewriting its core.
+
+## 5. Product objective
+
+Kudu unifies data from existing industrial applications into a consistent, searchable, machine-oriented information model.
+
+Example sources:
+- App A: fault events, camera identifiers, video recordings, file paths, and APIs.
+- App B: PLC signals, measurements, timestamps, and historical values.
+- Future sources: REST APIs, webhooks, CSV/JSON files, OPC UA, and MQTT where justified.
+
+Kudu must retain source provenance and selected original references while storing normalized records in its own database.
+
+The product must ultimately run entirely on-premises and support operation without internet connectivity after installation.
+
+## 6. Initial technology direction
+
+Use a TypeScript monorepo with clear frontend, backend, shared-contract, and database boundaries.
+
+- Frontend: React, TypeScript, Vite.
+- Backend: Node.js, TypeScript, Fastify.
+- Database: PostgreSQL.
+- Database access: a typed SQL layer and versioned SQL migrations.
+- UI styling: restrained, consistent CSS variables and reusable components.
+- API: versioned REST API under `/api/v1`.
+- Media storage: local filesystem behind a storage abstraction.
+- Deployment: Docker Compose.
+- MCP: an optional separate adapter that uses the same application services as REST.
+
+Verify library compatibility and maintenance status before adding dependencies. Use a supported Node.js LTS release and a compatible PostgreSQL release.
+
+Do not introduce Kubernetes, Redis, multiple databases, microservices, a plugin marketplace, or a complex frontend state-management framework without a demonstrated requirement.
+
+## 7. Architectural boundaries
+
+Keep these responsibilities separate:
+1. Domain models and business rules.
+2. Application services and use cases.
+3. Persistence and repository implementations.
+4. Source connectors and ingestion.
+5. REST API and validation.
+6. Frontend presentation and API client.
+7. Optional MCP interface.
+8. Deployment and operational tooling.
+
+Do not place business logic inside React components or HTTP route handlers.
+
+## 8. Engineering rules
+
+- No fake backend or mock data presented as real data.
+- No buttons that imply successful operations without performing them.
+- No hardcoded credentials or secrets.
+- No mandatory cloud services, external AI APIs, CDNs, or cloud databases.
+- Explicit validation at system boundaries.
+- Stable internal asset identities independent of IP addresses and source-system identifiers.
+- UTC-normalized timestamps with original source timestamp information preserved where available.
+- Idempotent ingestion wherever practical.
+- Explicit provenance, schema versions, mapping versions, and error states.
+- Versioned database migrations.
+- Structured logging and validated environment configuration.
+- Safe file access restricted to configured storage locations.
+- No arbitrary SQL or unrestricted filesystem access through the API.
+- No machine-control or PLC-write operations in the initial release.
+
+Keep unknown source fields available rather than silently discarding them.
+
+## 9. MVP scope
+
+Build only the essential first release:
+- Asset registry.
+- Data source registry.
+- Unified events and measurements.
+- Search and filtering.
+- Event details with source references and video links.
+- Data profiling and mapping proposals.
+- Review and publication of explicit field mappings.
+- Unified namespace browsing.
+- REST API.
+- Operational health and ingestion status.
+- Optional MCP interface.
+- On-premises deployment support.
+
+Do not build unrelated features or a large collection of generic dashboard widgets.
+
+## 10. Documentation requirements
+
+Documentation must be maintained inside `VS Code Edit/docs/` throughout development, not written as a final afterthought.
+
+Whenever a feature changes an API, schema, configuration option, developer command, deployment process, or architecture decision, update the relevant documentation in the same task.
+
+The root `VS Code Edit/README.md` must serve as the entry point for a new developer and link to the detailed documentation.
+
+Keep documentation concise, accurate, and aligned with the actual code. Never document a feature as implemented until it exists and has been verified.
+
+## 11. Repository size and simplicity
+
+Optimize for the smallest maintainable implementation that satisfies the requirements.
+
+- Reuse modules and components when they have a genuine shared purpose.
+- Avoid excessive file fragmentation.
+- Avoid duplicate abstractions.
+- Avoid generating separate documentation files for trivial details.
+- Avoid unnecessary test scaffolding and example applications.
+- Keep tests focused on critical business rules and integration paths.
+- Do not sacrifice correctness, security, or essential verification simply to reduce the number of files.
+
+The goal is not the fewest files at any cost. The goal is a compact, understandable codebase with clear ownership and minimal unnecessary complexity.
+
+## 12. Your initial task
+
+Do not implement the entire product in one pass.
+
+First:
+1. Inspect the project environment and determine any Replit-specific constraints.
+2. Create the `VS Code Edit/` directory and the minimal repository foundation inside it.
+3. Create the root package manifest, lockfile when dependencies are installed, and essential configuration.
+4. Create the initial documentation files with accurate setup instructions and architecture decisions.
+5. Establish the frontend, backend, shared contracts, and database migration structure.
+6. Ensure the application can be built and run without depending on Replit-specific services.
+7. Verify the basic development workflow and report the actual results.
+8. Present the resulting directory tree and explain how another developer would start the project from `VS Code Edit/`.
+
+Do not generate all business features yet. Stop once the foundation is established and the handoff requirements are demonstrably satisfied.
+
+For every subsequent implementation task, continue developing inside `VS Code Edit/`, keep documentation current, and preserve the portability of the application.

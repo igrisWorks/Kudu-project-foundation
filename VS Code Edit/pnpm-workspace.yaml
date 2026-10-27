@@ -1,0 +1,6 @@
+packages:
+  - frontend
+  - backend
+  - shared
+
+minimumReleaseAge: 1440
