@@ -27,7 +27,10 @@ services:
       HOST: 0.0.0.0
       PORT: 3000
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      KUDU_IMPORT_DIRECTORY: /imports
       NODE_ENV: production
+    volumes:
+      - ${KUDU_IMPORT_HOST_DIRECTORY:-./imports}:/imports:ro
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

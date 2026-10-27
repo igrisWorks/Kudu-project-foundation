@@ -177,7 +177,7 @@ function fingerprint(input: ReturnType<typeof validateEventIngest>): string {
   return createHash("sha256").update(canonicalJson(stableRecord)).digest("hex");
 }
 
-async function ingestEvent(
+export async function ingestEvent(
   db: Kysely<Database>,
   rawInput: unknown,
 ): Promise<IngestEventResponse> {

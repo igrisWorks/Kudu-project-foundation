@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceRecord, type DataSourceType, type Page } from "@kudu/shared";
-import { ApiError, createDataSource, getDataSource, listDataSources, updateDataSource } from "../api";
+import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceRecord, type DataSourceType, type FileImportResult, type Page } from "@kudu/shared";
+import { ApiError, createDataSource, getDataSource, importDataSourceFile, listDataSources, updateDataSource } from "../api";
 import { ConnectorBadge, displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
 const PAGE_SIZE = 15;
@@ -71,22 +71,53 @@ function DataSourceDetailPage() {
   const [record, setRecord] = useState<DataSourceRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importResult, setImportResult] = useState<FileImportResult | null>(null);
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try { setRecord(await getDataSource(id)); } catch (cause) { setError(displayError(cause)); }
     finally { setLoading(false); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
+  async function runFileImport() {
+    setImporting(true); setImportError(""); setImportResult(null);
+    try { setImportResult(await importDataSourceFile(id)); }
+    catch (cause) { setImportError(displayError(cause)); }
+    finally { setImporting(false); }
+  }
   if (loading) return <main className="page-main"><LoadingState label="Loading the actual data source record…" /></main>;
   if (error || !record) return <main className="page-main"><ErrorState title="Data source unavailable" message={error || "The requested source was not returned by the API."} retry={() => void load()} back="/data-sources" /></main>;
   const cfg = record.configuration;
+  const fileFormat = record.sourceType === "csv_file" ? "CSV" : record.sourceType === "json_file" ? "JSON" : null;
   return <main className="page-main">
     <div className="detail-heading"><Link href="/data-sources" className="back-link" data-testid="link-back-data-sources">← All data sources</Link>
       <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />DATA SOURCE RECORD</div><h1>{record.displayName}</h1><span className="detail-key" data-testid="text-data-source-key">{record.sourceKey}</span></div>
-        <div className="detail-actions"><Link className="button" href={`/data-sources/${encodeURIComponent(id)}/edit`} data-testid="button-edit-data-source">Edit record</Link></div>
+        <div className="detail-actions">
+          {fileFormat && record.enabled && <button className="button button-primary" type="button" onClick={() => void runFileImport()} disabled={importing} data-testid="button-import-source-file">{importing ? "Importing…" : `Import configured ${fileFormat} file`}</button>}
+          <Link className="button" href={`/data-sources/${encodeURIComponent(id)}/edit`} data-testid="button-edit-data-source">Edit record</Link>
+        </div>
       </div>
     </div>
-    <div className="notice" data-testid="notice-source-not-implemented"><strong>Connector and ingestion: not implemented.</strong> Enabled state is configuration metadata only; no connection or outbound traffic is started.</div>
+    <div className="notice" data-testid="notice-source-import">
+      {fileFormat
+        ? <><strong>{fileFormat} file import is available.</strong> Imports read the registered relative file from the configured local import directory. {record.enabled ? "Imports run only when requested and are not scheduled." : "Enable this source before importing. No import is started while disabled."}</>
+        : <><strong>File import is not supported for this source type.</strong> Only enabled CSV and JSON file sources can be imported. REST API and manual sources do not connect or start outbound traffic.</>}
+    </div>
+    {importError && <div className="notice error" role="alert" data-testid="error-file-import"><strong>Import failed.</strong> {importError}</div>}
+    {importResult && <section className="panel file-import-result" data-testid="panel-file-import-result">
+      <h2 className="panel-title">Import result · {importResult.format.toUpperCase()}</h2>
+      <p data-testid="text-file-import-counts">
+        {importResult.records} records processed: {importResult.imported} imported, {importResult.skipped} skipped as duplicates, {importResult.failed} failed.
+      </p>
+      {importResult.errors.length > 0 && <ul className="file-import-errors" data-testid="list-file-import-errors">
+        {importResult.errors.map((item, index) => <li key={`${item.record}-${item.code}-${index}`}>
+          <strong>Record {item.record} · {item.code}</strong>: {item.message}
+          {item.fields && <span className="file-import-field-errors"> {Object.values(item.fields).join(" ")}</span>}
+        </li>)}
+      </ul>}
+      {importResult.errorsTruncated && <p className="field-hint">Only the first {importResult.errors.length} record errors are displayed.</p>}
+    </section>}
     <div className="detail-grid">
       <section className="panel"><h2 className="panel-title">Source metadata</h2><dl className="definition-list">
         <dt>Source key</dt><dd className="mono">{record.sourceKey}</dd><dt>Type</dt><dd>{sourceLabels[record.sourceType]}</dd>
@@ -101,11 +132,17 @@ function DataSourceDetailPage() {
           {(cfg.kind === "json_file" || cfg.kind === "csv_file") && <><dt>Relative path</dt><dd className="mono" data-testid="text-source-path">{cfg.relativePath}</dd></>}
           {cfg.kind === "manual" && <><dt>Reference</dt><dd>{cfg.referenceOnly ? "Manual reference only" : "Not available"}</dd></>}
         </dl></section>
-        <section className="panel"><h2 className="panel-title">Connector and ingestion status</h2><dl className="definition-list">
-          <dt>Connection</dt><dd><ConnectorBadge status={record.connectionStatus} /></dd><dt>Ingestion</dt><dd><ConnectorBadge status={record.ingestionStatus} /></dd>
-          <dt>Last successful sync</dt><dd className="time-label" data-testid="text-last-sync">{formatDate(record.lastSuccessfulSyncAt)}</dd>
-          <dt>Last error</dt><dd>{record.lastErrorSummary || <span className="muted">No error reported</span>}</dd>
-        </dl></section>
+        {fileFormat
+          ? <section className="panel" data-testid="panel-import-status"><h2 className="panel-title">File import status</h2><dl className="definition-list">
+            <dt>Supported format</dt><dd>{fileFormat}</dd>
+            <dt>Availability</dt><dd>{record.enabled ? "Available for on-demand import" : "Disabled in registry"}</dd>
+            <dt>Run history</dt><dd>Not stored; each result is returned after its import request.</dd>
+          </dl></section>
+          : <section className="panel"><h2 className="panel-title">Connector and ingestion status</h2><dl className="definition-list">
+            <dt>Connection</dt><dd><ConnectorBadge status={record.connectionStatus} /></dd><dt>Ingestion</dt><dd><ConnectorBadge status={record.ingestionStatus} /></dd>
+            <dt>Last successful sync</dt><dd className="time-label" data-testid="text-last-sync">{formatDate(record.lastSuccessfulSyncAt)}</dd>
+            <dt>Last error</dt><dd>{record.lastErrorSummary || <span className="muted">No error reported</span>}</dd>
+          </dl></section>}
       </div>
     </div>
   </main>;

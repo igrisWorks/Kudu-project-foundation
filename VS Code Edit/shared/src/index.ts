@@ -198,6 +198,24 @@ export interface IngestEventResponse {
   duplicate: boolean;
 }
 
+export interface FileImportRecordError {
+  record: number;
+  code: string;
+  message: string;
+  fields?: Record<string, string>;
+}
+
+export interface FileImportResult {
+  sourceId: string;
+  format: "csv" | "json";
+  records: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  errors: FileImportRecordError[];
+  errorsTruncated: boolean;
+}
+
 export interface EventListFilters {
   sourceId?: string;
   assetId?: string;

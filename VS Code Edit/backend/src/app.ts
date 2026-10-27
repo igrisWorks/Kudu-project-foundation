@@ -1,12 +1,14 @@
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { access } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { HealthResponse } from "@kudu/shared";
 import type { Database } from "./database.js";
 import { checkDatabase } from "./database.js";
 import { ApiFailure } from "./errors.js";
 import { registerEventRoutes } from "./events.js";
+import { registerFileImportRoutes } from "./file-import.js";
 import { registerRegistryRoutes } from "./registry.js";
 import type { Kysely } from "kysely";
 
@@ -14,6 +16,7 @@ interface AppOptions {
   db: Kysely<Database>;
   staticDirectory?: string;
   logLevel?: string;
+  importDirectory?: string;
   databaseCheck?: (db: Kysely<Database>) => Promise<void>;
 }
 
@@ -117,6 +120,12 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
 
   registerRegistryRoutes(app, options.db);
   registerEventRoutes(app, options.db);
+  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const importDirectory = resolve(
+    projectRoot,
+    options.importDirectory ?? process.env.KUDU_IMPORT_DIRECTORY ?? "imports",
+  );
+  registerFileImportRoutes(app, options.db, importDirectory);
 
   if (options.staticDirectory) {
     try {

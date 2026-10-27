@@ -70,7 +70,7 @@ Example:
 | `GET` | `/api/v1/data-sources/{id}` | Get metadata and redacted configuration status. |
 | `PATCH` | `/api/v1/data-sources/{id}` | Update supplied metadata. Changing source type requires matching configuration. |
 
-Supported source types are `rest_api`, `json_file`, `csv_file`, and `manual`. REST configuration accepts an HTTP(S) base URL without credentials, query parameters, or fragments. An optional credential reference must have the form `env:KUDU_SOURCE_NAME`; the API stores only the reference and returns only `credentialConfigured`, never the reference or secret value. The referenced variable must be provisioned out of band. File paths must be relative; the API does not open them. All connection and ingestion statuses remain `not_implemented`, and registering or enabling a source never starts outbound traffic.
+Supported source types are `rest_api`, `json_file`, `csv_file`, and `manual`. REST configuration accepts an HTTP(S) base URL without credentials, query parameters, or fragments. An optional credential reference must have the form `env:KUDU_SOURCE_NAME`; the API stores only the reference and returns only `credentialConfigured`, never the reference or secret value. The referenced variable must be provisioned out of band. File-source paths must be relative to the configured import directory. Registration alone never opens a file, connects to a source, or starts outbound traffic.
 
 Example:
 
@@ -86,6 +86,39 @@ Example:
   }
 }
 ```
+
+### CSV/JSON file import
+
+| Method | Route | Behavior |
+|---|---|---|
+| `POST` | `/api/v1/data-sources/{id}/import` | Import the file already configured on an enabled CSV or JSON source. The request has no body and accepts no filesystem path. |
+
+The route reads the source's registered `configuration.relativePath` beneath `KUDU_IMPORT_DIRECTORY`. Absolute paths, traversal segments, and symlinks escaping that directory are rejected. The configured extension must match the source type (`.csv` for `csv_file`, `.json` for `json_file`). REST API and manual sources are not importable. Disabled sources return `409`.
+
+The default local import directory is `imports/` at the project root. In Docker Compose, the host directory defaults to `./imports` and is mounted read-only at `/imports`. Configure `KUDU_IMPORT_DIRECTORY` for direct local runs, and `KUDU_IMPORT_HOST_DIRECTORY` to change the Compose host directory.
+
+Files must be UTF-8, no larger than 5 MiB, and contain at most 1,000 records. CSV files require headers `eventType`, `occurredAt`, and `payload`; optional headers are `assetId` and `sourceRecordId`. The `payload` cell is a JSON object (or blank for an empty object). Other columns are preserved as string fields inside the event payload; a field that collides with a payload key fails that record. Quoted CSV fields support commas, newlines, and escaped quotes.
+
+```csv
+eventType,occurredAt,sourceRecordId,payload,station
+alarm.raised,2026-10-27T12:00:00Z,row-001,"{""code"":""E-7""}",press-2
+```
+
+JSON files contain an array of event objects with the same mapped fields. Unknown top-level keys are merged into `payload`; duplicate keys between those fields and `payload` fail the record instead of overwriting data.
+
+```json
+[
+  {
+    "eventType": "alarm.raised",
+    "occurredAt": "2026-10-27T12:00:00Z",
+    "sourceRecordId": "row-001",
+    "payload": { "code": "E-7" },
+    "station": "press-2"
+  }
+]
+```
+
+Each valid record is sent through the normal event validation, reference checks, and source-scoped deduplication path. `sourceRecordId` is used as the deduplication key when present. Otherwise, the key is derived from the configured relative path and CSV line or JSON array position, making an unchanged repeat import deterministic. A duplicate increments `skipped`; invalid records and conflicting key reuse increment `failed`. The response reports `records`, `imported`, `skipped`, and `failed`, plus up to 100 record/line errors. Results are returned per request; import history is not stored.
 
 ### Events
 

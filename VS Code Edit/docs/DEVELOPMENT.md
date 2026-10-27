@@ -44,6 +44,15 @@ KUDU_TEST_DATABASE_URL=postgresql://... node --import tsx --test src/events.inte
 
 This test applies pending migrations and removes its unique fixture events, assets, and source afterward. It covers persisted payload/provenance, timestamp normalization, invalid references, source-scoped retries, and deduplication-key conflicts. Use a disposable or local database, never production.
 
+File-import checks use the same disposable/local PostgreSQL connection:
+
+```sh
+cd backend
+KUDU_TEST_DATABASE_URL=postgresql://... node --import tsx --test src/file-import.integration.test.ts
+```
+
+The focused tests cover CSV and JSON mapping, partial record failures, repeated imports, unsupported/disabled sources, path containment, malformed input, and size/count limits. Test files are created in temporary directories and removed afterward.
+
 ## Conventions
 
 - Keep runtime features in this directory, not in the Replit wrapper.

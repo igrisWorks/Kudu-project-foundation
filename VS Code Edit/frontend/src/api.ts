@@ -9,6 +9,7 @@ import type {
   DataSourceRecord,
   DataSourceType,
   DataSourceUpdateInput,
+  FileImportResult,
   EventDetail,
   EventListFilters,
   EventListItem,
@@ -140,6 +141,12 @@ export function updateDataSource(
   return request(`/api/v1/data-sources/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+
+export function importDataSourceFile(id: string): Promise<FileImportResult> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}/import`, {
+    method: "POST",
   });
 }
 

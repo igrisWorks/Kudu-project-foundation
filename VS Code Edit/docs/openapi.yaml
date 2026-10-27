@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   summary: Asset and data-source registry API
   description: |
-    Versioned API for Kudu's asset and data-source registries and event ingestion.
+    Versioned API for Kudu's registries, event ingestion, and CSV/JSON file imports.
 
     Data-source registration stores metadata only. Kudu does not connect to
     REST endpoints, read files, or ingest data. REST credential references are
@@ -253,6 +253,34 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/data-sources/{id}/import:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      tags: [Data sources]
+      operationId: importDataSourceFile
+      summary: Import the configured file for an enabled data source
+      description: |
+        Reads only the relativePath stored on the registered source, beneath
+        KUDU_IMPORT_DIRECTORY. The request has no body and accepts no
+        filesystem path. Only CSV and JSON file sources are supported.
+        Identical repeated records use the normal event ingestion and
+        source-scoped deduplication behavior.
+      responses:
+        "200":
+          description: Import completed; the result includes imported, skipped, and failed record counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileImportResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          description: File size or record-count limit exceeded.
   /api/v1/events:
     get:
       tags: [Events]
@@ -933,4 +961,56 @@ components:
         event:
           $ref: "#/components/schemas/EventDetail"
         duplicate:
+          type: boolean
+    FileImportRecordError:
+      type: object
+      required: [record, code, message]
+      properties:
+        record:
+          type: integer
+          minimum: 1
+          description: CSV physical start line or one-based JSON array position.
+        code:
+          type: string
+        message:
+          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+    FileImportResult:
+      type: object
+      required:
+        - sourceId
+        - format
+        - records
+        - imported
+        - skipped
+        - failed
+        - errors
+        - errorsTruncated
+      properties:
+        sourceId:
+          type: string
+          format: uuid
+        format:
+          type: string
+          enum: [csv, json]
+        records:
+          type: integer
+          minimum: 0
+        imported:
+          type: integer
+          minimum: 0
+        skipped:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileImportRecordError"
+        errorsTruncated:
           type: boolean
