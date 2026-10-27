@@ -32,6 +32,14 @@ Database unavailable response (`503`):
 
 `checkedAt` is UTC. This endpoint intentionally does not include connection details or error messages. Shared response types are maintained in `shared/src/index.ts`.
 
+## Authentication
+
+`GET /healthz`, `GET /api/v1/health`, and `GET /api/v1/auth/session` are public. `POST /api/v1/auth/login` accepts a password and sets an opaque session cookie. All other `/api/v1` routes require that session and the `X-Kudu-CSRF` header matching the same-site CSRF cookie, including sensitive reads, writes, event ingestion, file import, and REST sync. `POST /api/v1/auth/logout` revokes the current session.
+
+The login response does not include the session or CSRF token in JSON. The session cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` by default; the separate CSRF cookie is same-site and required alongside the header for every protected API request. Sessions expire after 8 hours and are held in memory, so restarting Kudu invalidates them. There is one shared operator password and no roles.
+
+When `KUDU_AUTH_PASSWORD_HASH` or a valid `SESSION_SECRET` is missing, private API routes fail closed with `503 AUTH_NOT_CONFIGURED`; health checks remain available. Invalid login attempts are rate-limited to 5 per source IP and 30 globally per 15-minute window, with at most two concurrent password checks. Configure the hash and session secret as protected environment values; never commit them or place the password in a command-line argument.
+
 ## Registry routes
 
 All registry routes are under `/api/v1`. List responses use `{ "items": [], "total": 0, "page": 1, "pageSize": 25 }`; page numbers start at 1 and `pageSize` is limited to 1–100. Search is case-insensitive and limited to 120 characters. Results have stable key/name and ID ordering.
@@ -131,7 +139,7 @@ Use an active mapping such as `eventType: "kind"`, `occurredAt: "time"`, `source
 
 Public IPv4/IPv6 destinations are allowed by default. Loopback, private, link-local, multicast, reserved, and other special-use addresses are blocked. DNS answers are checked and the connection is pinned to a validated address. Each redirect is checked again, redirects are bounded, HTTPS-to-HTTP downgrade is blocked, and bearer credentials are never forwarded to another origin.
 
-For trusted on-premises APIs, configure `KUDU_REST_TRUSTED_HOSTS` as a comma-separated list of exact hostnames or IP addresses, such as `plc-api.internal,10.20.30.40`. Only listed hosts may resolve to private IPv4 or IPv6 ULA addresses. Wildcards are not supported; loopback, link-local, multicast, and reserved addresses remain blocked. Configure this allowlist only on a trusted host. The Kudu API itself remains unauthenticated; keep it loopback-only and do not expose it to untrusted networks.
+For trusted on-premises APIs, configure `KUDU_REST_TRUSTED_HOSTS` as a comma-separated list of exact hostnames or IP addresses, such as `plc-api.internal,10.20.30.40`. Only listed hosts may resolve to private IPv4 or IPv6 ULA addresses. Wildcards are not supported; loopback, link-local, multicast, and reserved addresses remain blocked. Configure this allowlist only on a trusted host. Kudu's business API requires an authenticated session; retain loopback binding and TLS at any reverse proxy.
 
 ### CSV/JSON file import
 
@@ -194,7 +202,7 @@ Mappings are available for registered CSV, JSON, and REST API sources. A definit
 
 The `assetKey` rule resolves only an exact active `asset_key` already in the asset registry; names, IP addresses, and fuzzy matches are never used. Each mapped import or REST sync stores the mapping version and original source record in event provenance. The occurrence time is normalized to UTC by event ingestion while its original text is retained as `sourceTimestamp`. Unmapped fields remain in payload; mapped payload outputs are added without silently overwriting different existing values. Missing required mapped fields or unregistered asset keys fail that record. Validation checks the mapping definition; record-specific missing values are reported during import or sync.
 
-Activation changes interpretation only for subsequent imports and REST syncs. Existing events are not rewritten. Mapping version is retained in provenance, and source-scoped deduplication remains in effect: reusing a source-record ID with changed normalized content is a conflict, not an update. If no mapping is active, existing CSV/JSON import behavior is unchanged; REST sync requires an active mapping. Mapping writes, like other API writes, are unauthenticated; keep the application loopback-only until access controls are implemented.
+Activation changes interpretation only for subsequent imports and REST syncs. Existing events are not rewritten. Mapping version is retained in provenance, and source-scoped deduplication remains in effect: reusing a source-record ID with changed normalized content is a conflict, not an update. If no mapping is active, existing CSV/JSON import behavior is unchanged; REST sync requires an active mapping. Mapping writes require the authenticated session and CSRF header.
 
 ### Events
 
@@ -237,4 +245,4 @@ Example:
 
 Errors use `{ "error": { "code": "...", "message": "...", "fields": {} } }`; `fields` is omitted when there are no field-specific errors. Duplicate registry keys and conflicting event deduplication-key reuse return `409`; validation failures return `400`; missing records return `404`. An identical event retry returns the original record with `200`.
 
-Authentication and authorization are not implemented. All write routes are unauthenticated. The default server host is `127.0.0.1`, and the Compose app port is published on loopback only. Do not override these controls or expose the service to untrusted networks until authentication and authorization are added.
+The default server host is `127.0.0.1`, and the Compose app port is published on loopback only. Health endpoints remain public; registry, event, import, mapping, and sync routes require an authenticated session. Do not expose the service over an untrusted network without TLS and an appropriately configured reverse proxy.

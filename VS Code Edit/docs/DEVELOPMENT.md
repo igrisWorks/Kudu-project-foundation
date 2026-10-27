@@ -23,6 +23,8 @@ pnpm dev
 
 `pnpm dev` starts the API and Vite frontend. Vite serves `http://localhost:5173` and proxies API calls to `http://localhost:3000`. The status panel reads the live health endpoint; registry pages read and write persisted API records, not demonstration data.
 
+The authenticated UI requires `KUDU_AUTH_PASSWORD_HASH` and `SESSION_SECRET`. Generate the hash interactively with `pnpm --filter @kudu/backend auth:hash-password`, then set both values in `.env` or the workspace Secrets panel. Do not commit either value. The example environment file intentionally leaves them blank; without them, private API routes fail closed while health probes continue to work.
+
 ## Quality checks
 
 ```sh
@@ -70,6 +72,15 @@ KUDU_TEST_DATABASE_URL=postgresql://... node --import tsx --test src/rest-sync.i
 ```
 
 They cover REST configuration validation, persisted mapped records and duplicates, malformed JSON and remote HTTP failures, and blocked destinations and redirects. No live API is contacted.
+
+Authentication checks are self-contained and use a fake database connection:
+
+```sh
+cd backend
+node --import tsx --test src/auth.integration.test.ts
+```
+
+They verify public health checks, protected API reads/writes, password login, CSRF enforcement, logout, fail-closed configuration, and login throttling.
 
 ## Conventions
 

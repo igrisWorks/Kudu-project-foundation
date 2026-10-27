@@ -4,6 +4,12 @@ export interface HealthResponse {
   checkedAt: string;
 }
 
+export interface AuthSessionResponse {
+  configured: boolean;
+  authenticated: boolean;
+  expiresAt?: string;
+}
+
 export const ASSET_TYPES = [
   "machine",
   "production_line",

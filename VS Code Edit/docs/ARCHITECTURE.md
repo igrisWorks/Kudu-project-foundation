@@ -21,7 +21,7 @@ The browser talks to the versioned REST API at `/api/v1`. Vite proxies `/api` to
 
 The API exposes liveness and readiness probes plus versioned asset and data-source registry routes. Asset parent links are validated and cycle-checked while serialized with a PostgreSQL advisory lock. Data-source registration stores metadata only; it does not connect, read files, or ingest data. The API has no machine-control operations.
 
-Registry writes are currently unauthenticated. The default development host is loopback, and Docker Compose publishes the app port only on loopback. Do not expose this release to untrusted networks until authentication and authorization are implemented. Database access uses configured credentials; migrations are transactional, serialized with a separate PostgreSQL advisory lock, and reject checksum changes to already-applied files.
+Registry, event, import, mapping, and sync API routes require the single operator session and CSRF protection. Liveness and readiness endpoints remain public. Sessions are in-memory and single-instance; the default host is loopback, and Docker Compose publishes the app port only on loopback. Use TLS through a same-host reverse proxy for remote browser access. Database access uses configured credentials; migrations are transactional, serialized with a separate PostgreSQL advisory lock, and reject checksum changes to already-applied files.
 
 ## Compatibility decisions
 

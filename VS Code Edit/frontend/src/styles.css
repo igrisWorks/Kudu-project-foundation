@@ -92,9 +92,52 @@ textarea {
   background: var(--accent);
 }
 
+.topbar-signout {
+  min-height: 34px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
 .page-main {
   min-height: calc(100dvh - 132px);
   padding: 48px 0 52px;
+}
+
+.signin-main {
+  display: grid;
+  place-items: center;
+}
+
+.signin-panel {
+  width: min(100%, 470px);
+  padding: 32px;
+}
+
+.signin-panel h1 {
+  margin: 12px 0 8px;
+  font-size: clamp(30px, 5vw, 42px);
+  letter-spacing: -.04em;
+}
+
+.signin-form {
+  display: grid;
+  gap: 17px;
+  margin-top: 24px;
+}
+
+.signin-form .button {
+  justify-self: start;
+  min-width: 120px;
+}
+
+.signin-panel .notice {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.signin-panel .field-hint {
+  margin-top: 22px;
 }
 
 .page-heading {

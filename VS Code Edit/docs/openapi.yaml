@@ -12,13 +12,18 @@ info:
     protections. Credential references are environment-variable names and are
     redacted from responses.
 
-    This API does not yet implement authentication or authorization. Write
-    and sync endpoints must not be exposed to untrusted networks.
+    Registry, event, import, mapping, and sync routes require the operator
+    session cookie and X-Kudu-CSRF matching the same-site CSRF cookie. Health
+    checks and authentication bootstrap routes remain public. Keep the
+    application loopback-bound and use TLS for remote browser access.
 servers:
   - url: /
-security: []
+security:
+  - KuduSessionCookie: []
+    KuduCsrfHeader: []
 tags:
   - name: Health
+  - name: Authentication
   - name: Assets
   - name: Data sources
   - name: Events
@@ -28,6 +33,7 @@ paths:
       tags: [Health]
       operationId: getLiveness
       summary: Check process liveness
+      security: []
       responses:
         "200":
           description: The HTTP process is accepting requests.
@@ -44,6 +50,7 @@ paths:
       tags: [Health]
       operationId: getReadiness
       summary: Check API and database readiness
+      security: []
       responses:
         "200":
           description: Database is reachable.
@@ -53,6 +60,59 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+  /api/v1/auth/session:
+    get:
+      tags: [Authentication]
+      operationId: getAuthSession
+      summary: Check the current operator session
+      security: []
+      responses:
+        "200":
+          description: Authentication configuration and current session state; no tokens are returned in JSON.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+  /api/v1/auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: Create an operator session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthLoginInput"
+      responses:
+        "200":
+          description: Login succeeded; session and CSRF cookies are set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          description: The login request is invalid.
+        "401":
+          description: The password is incorrect.
+        "429":
+          description: Login attempts are temporarily throttled.
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /api/v1/auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: Revoke the current operator session
+      description: Requires the authenticated session cookie and X-Kudu-CSRF header.
+      responses:
+        "204":
+          description: Session revoked and cookies cleared.
+        "401":
+          description: The session is missing or expired.
+        "403":
+          description: The CSRF token is invalid.
   /api/v1/assets:
     get:
       tags: [Assets]
@@ -554,6 +614,17 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 components:
+  securitySchemes:
+    KuduSessionCookie:
+      type: apiKey
+      in: cookie
+      name: kudu_session
+      description: Opaque 8-hour HttpOnly SameSite session cookie.
+    KuduCsrfHeader:
+      type: apiKey
+      in: header
+      name: X-Kudu-CSRF
+      description: Must match the same-site kudu_csrf cookie on every protected API request.
   parameters:
     Id:
       name: id
@@ -613,6 +684,26 @@ components:
           schema:
             $ref: "#/components/schemas/HealthResponse"
   schemas:
+    AuthLoginInput:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+    AuthSession:
+      type: object
+      required: [configured, authenticated]
+      properties:
+        configured:
+          type: boolean
+        authenticated:
+          type: boolean
+        expiresAt:
+          type: string
+          format: date-time
     HealthResponse:
       type: object
       required: [status, database, checkedAt]

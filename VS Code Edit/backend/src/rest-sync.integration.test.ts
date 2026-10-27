@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { Kysely, PostgresDialect } from "kysely";
 import { Pool } from "pg";
-import { createApp } from "./app.js";
+import { createAuthenticatedTestApp } from "./test-support/authenticated-app.js";
 import type { Database } from "./database.js";
 import { ApiFailure } from "./errors.js";
 import { runMigrations } from "./migration-runner.js";
@@ -43,7 +43,7 @@ async function createFixture(context: TestLifecycle) {
   const pool = new Pool({ connectionString: databaseUrl });
   const db = new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
   await runMigrations(pool, migrationsDirectory);
-  const app = await createApp({ db, logLevel: "silent", allowLoopbackRestTests: true });
+  const app = await createAuthenticatedTestApp({ db, logLevel: "silent", allowLoopbackRestTests: true });
   const sourceIds: string[] = [];
   const assetIds: string[] = [];
 

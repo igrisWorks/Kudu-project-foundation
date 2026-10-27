@@ -37,4 +37,4 @@ For a production-style local run, use `pnpm build`, then `pnpm start`. Docker Co
 - [Data model](docs/DATA_MODEL.md)
 - [Changelog](docs/CHANGELOG.md)
 
-The first MVP slice now includes persistent asset and data-source registries. Connectors, ingestion, event records, mapping workflows, authentication, and machine-control operations are not implemented. Registry write endpoints currently have no authentication; keep the application bound to loopback and do not expose it to untrusted networks.
+The MVP includes persistent asset and data-source registries, event ingestion, mapped file import, read-only REST sync, and single-operator authentication. It does not include PLC control, per-user roles, or multi-user account management. Registry, event, import, mapping, and sync API routes require the configured operator session and CSRF token; keep the application bound to loopback and use TLS for remote access.

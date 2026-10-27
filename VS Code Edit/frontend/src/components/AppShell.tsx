@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 
-export default function AppShell({ children }: { children: ReactNode }) {
+export default function AppShell({ children, onLogout }: { children: ReactNode; onLogout: () => void }) {
   const [location] = useLocation();
   return <div className="app-shell">
     <header className="app-topbar">
@@ -13,6 +13,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <Link href="/assets" aria-current={location.startsWith("/assets") ? "page" : undefined} data-testid="nav-assets">Assets</Link>
         <Link href="/data-sources" aria-current={location.startsWith("/data-sources") ? "page" : undefined} data-testid="nav-data-sources">Data sources</Link>
         <Link href="/events" aria-current={location.startsWith("/events") ? "page" : undefined} data-testid="nav-events">Events</Link>
+        <button className="button button-quiet topbar-signout" type="button" onClick={onLogout} data-testid="button-sign-out">Sign out</button>
       </nav>
       <div className="environment"><span className="environment-dot" /> LOCAL REGISTRY</div>
     </header>

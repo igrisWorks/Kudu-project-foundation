@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node --env-file-if-exists=../.env dist/index.js",
     "migrate": "node --env-file-if-exists=../.env dist/migrate.js",
+    "auth:hash-password": "node --import tsx src/auth-cli.ts",
     "test": "node --import tsx --test src/app.test.ts src/config.test.ts src/registry-validation.test.ts src/registry.integration.test.ts"
   },
   "dependencies": {

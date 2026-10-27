@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { Kysely, PostgresDialect } from "kysely";
 import { Pool } from "pg";
-import { createApp } from "./app.js";
+import { createAuthenticatedTestApp } from "./test-support/authenticated-app.js";
 import type { Database } from "./database.js";
 import { runMigrations } from "./migration-runner.js";
 
@@ -44,7 +44,7 @@ test(
     const prefix = `kt${randomUUID().replaceAll("-", "").slice(0, 10)}`;
     const pool = new Pool({ connectionString: databaseUrl });
     const db = new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
-    const app = await createApp({ db, logLevel: "silent" });
+    const app = await createAuthenticatedTestApp({ db, logLevel: "silent" });
 
     context.after(async () => {
       await db

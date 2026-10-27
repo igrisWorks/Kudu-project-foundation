@@ -1,4 +1,5 @@
 import type {
+  AuthSessionResponse,
   AssetCreateInput,
   AssetDetail,
   AssetRecord,
@@ -24,6 +25,20 @@ import type {
   RestSyncResult,
 } from "@kudu/shared";
 
+let csrfToken: string | null = null;
+export const AUTH_EXPIRED_EVENT = "kudu:auth-expired";
+
+export function setCsrfToken(token: string | null): void {
+  csrfToken = token;
+}
+
+function readCsrfCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = "kudu_csrf=";
+  const entry = document.cookie.split(";").map(value => value.trim()).find(value => value.startsWith(prefix));
+  return entry ? entry.slice(prefix.length) : null;
+}
+
 export interface ListQuery {
   search?: string;
   page?: number;
@@ -44,14 +59,17 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
+  const headers = new Headers(init?.headers);
+  headers.set("Accept", "application/json");
+  if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (csrfToken) {
+    headers.set("X-Kudu-CSRF", csrfToken);
+  }
   try {
     response = await fetch(path, {
       ...init,
-      headers: {
-        Accept: "application/json",
-        ...(init?.body ? { "Content-Type": "application/json" } : {}),
-        ...init?.headers,
-      },
+      credentials: "same-origin",
+      headers,
     });
   } catch {
     throw new ApiError("The Kudu API could not be reached.", 0, "NETWORK_ERROR");
@@ -69,6 +87,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
             };
           }).error
         : undefined;
+    if (
+      response.status === 401 &&
+      (errorBody?.code === "AUTH_REQUIRED" || errorBody?.code === "SESSION_EXPIRED")
+    ) {
+      setCsrfToken(null);
+      if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    }
     throw new ApiError(
       errorBody?.message ?? `Request failed (${response.status}).`,
       response.status,
@@ -77,6 +102,36 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
   return payload as T;
+}
+
+export async function getAuthSession(): Promise<AuthSessionResponse> {
+  const session = await request<AuthSessionResponse>("/api/v1/auth/session");
+  const token = session.authenticated ? readCsrfCookie() : null;
+  setCsrfToken(token);
+  if (session.authenticated && !token) {
+    throw new ApiError(
+      "The browser did not accept Kudu's session security cookie. Check the HTTPS and cookie settings.",
+      0,
+      "CSRF_COOKIE_UNAVAILABLE",
+    );
+  }
+  return session;
+}
+
+export async function login(password: string): Promise<AuthSessionResponse> {
+  await request<AuthSessionResponse>("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+  return getAuthSession();
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await request<void>("/api/v1/auth/logout", { method: "POST" });
+  } finally {
+    setCsrfToken(null);
+  }
 }
 
 function listPath(resource: string, query: ListQuery, extra: Record<string, string> = {}) {

@@ -8,7 +8,7 @@ const config = loadConfig(process.env);
 const { db, close } = createDatabase(config.databaseUrl);
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 const staticDirectory = resolve(currentDirectory, "../../frontend/dist");
-const app = await createApp({ db, staticDirectory, logLevel: config.logLevel });
+const app = await createApp({ db, staticDirectory, logLevel: config.logLevel, auth: config.auth });
 
 const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, "Shutting down Kudu");

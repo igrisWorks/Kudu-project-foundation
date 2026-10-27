@@ -13,6 +13,7 @@ import { registerEventMappingRoutes } from "./event-mappings.js";
 import { registerRegistryRoutes } from "./registry.js";
 import { registerRestSyncRoutes } from "./rest-sync.js";
 import type { Kysely } from "kysely";
+import { AuthManager, registerAuthenticationGuard, registerAuthRoutes, type AuthConfiguration } from "./auth.js";
 
 interface AppOptions {
   db: Kysely<Database>;
@@ -22,12 +23,23 @@ interface AppOptions {
   restTrustedHosts?: string[];
   allowLoopbackRestTests?: boolean;
   databaseCheck?: (db: Kysely<Database>) => Promise<void>;
+  auth?: AuthConfiguration;
 }
 
 export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
       level: options.logLevel ?? process.env.LOG_LEVEL ?? "info",
+      redact: {
+        paths: [
+          "req.headers.cookie",
+          "req.headers.authorization",
+          "req.headers['x-kudu-csrf']",
+          "req.body.password",
+          "res.headers['set-cookie']",
+        ],
+        censor: "[REDACTED]",
+      },
     },
     trustProxy: false,
   });
@@ -122,6 +134,13 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     },
   );
 
+  const auth = new AuthManager(options.auth ?? {
+    passwordHash: process.env.KUDU_AUTH_PASSWORD_HASH,
+    sessionSecret: process.env.SESSION_SECRET,
+    cookieSecure: process.env.KUDU_COOKIE_SECURE?.trim().toLowerCase() !== "false",
+  });
+  registerAuthenticationGuard(app, auth);
+  registerAuthRoutes(app, auth);
   registerRegistryRoutes(app, options.db);
   registerEventRoutes(app, options.db);
   registerEventMappingRoutes(app, options.db);
