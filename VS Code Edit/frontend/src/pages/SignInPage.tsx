@@ -33,16 +33,11 @@ export default function SignInPage({
   }
 
   return <div className="app-shell signin-shell">
-    <header className="app-topbar signin-topbar">
-      <div className="brand" aria-label="Kudu">
-        <span className="brand-mark" aria-hidden="true"><span /><span /><span /></span><span>KUDU</span>
-      </div>
-      <div className="environment"><span className="environment-dot" /> PRIVATE REGISTRY</div>
-    </header>
-    <main className="page-main signin-main">
-      <section className="panel signin-panel">
+    <main className="signin-main">
+      <section className="signin-panel">
+        <img className="signin-logo" src="/kuduns-wordmark.svg" alt="KuduNS — Industrial Data · Unified Namespace" />
         <div className="eyebrow"><span className="eyebrow-line" /> OPERATOR ACCESS</div>
-        <h1>Sign in to Kudu</h1>
+        <h1>Sign in</h1>
         <p className="intro">Authenticate to access the asset registry, data sources, and event records.</p>
         {checking && <p className="notice" role="status">Checking the authentication service…</p>}
         {connectionError && <div className="notice error" role="alert">
@@ -74,6 +69,6 @@ export default function SignInPage({
         <p className="field-hint">Sessions expire after 8 hours. The health checks remain available without signing in.</p>
       </section>
     </main>
-    <footer className="footer"><span>KUDU / PROJECT FOUNDATION</span><span>PRIVATE INFRASTRUCTURE. YOUR DATA.</span></footer>
+    <footer className="footer signin-footer"><span>KUDUNS · INDUSTRIAL DATA</span><span>PRIVATE INFRASTRUCTURE</span></footer>
   </div>;
 }
