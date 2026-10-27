@@ -2,13 +2,12 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, realpath, type FileHandle } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import type { EventMappingDefinition, FileImportRecordError, FileImportResult, JsonObject } from "@kudu/shared";
+import type { FileImportRecordError, FileImportResult, JsonObject } from "@kudu/shared";
 import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database, StoredSourceConfiguration } from "./database.js";
 import { ApiFailure } from "./errors.js";
-import { readMappedField, validateEventMappingDefinition } from "./event-mappings.js";
+import { getActiveEventMapping, normalizeMappedEvent, type ActiveEventMapping } from "./event-mappings.js";
 import { ingestEvent } from "./events.js";
 
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
@@ -25,11 +24,6 @@ type JsonRecord = Record<string, unknown>;
 interface PreparedImportInput {
   input: JsonRecord;
   rawRecord: JsonObject;
-}
-
-interface ActiveEventMapping {
-  version: number;
-  definition: EventMappingDefinition;
 }
 
 interface CsvRow {
@@ -241,93 +235,17 @@ async function applyActiveMapping(
   recordNumber: number,
   relativePath: string,
 ): Promise<JsonRecord> {
-  const { definition, version } = mapping;
-  const eventType = readMappedField(prepared.rawRecord, definition.eventType!);
-  const occurredAt = readMappedField(prepared.rawRecord, definition.occurredAt!);
-  if (typeof eventType !== "string" || !eventType.trim()) {
-    throw recordFailure("The mapped event type is missing or is not a non-empty string.", {
-      eventType: `Provide a value in the mapped source field ${definition.eventType}.`,
-    });
-  }
-  if (typeof occurredAt !== "string" || !occurredAt.trim()) {
-    throw recordFailure("The mapped occurrence timestamp is missing or is not a non-empty string.", {
-      occurredAt: `Provide a value in the mapped source field ${definition.occurredAt}.`,
-    });
-  }
-
-  let sourceRecordId: string | undefined;
-  if (definition.sourceRecordId) {
-    const value = readMappedField(prepared.rawRecord, definition.sourceRecordId);
-    if (value !== undefined && value !== null && value !== "") {
-      if (typeof value !== "string") {
-        throw recordFailure("The mapped source-record ID must be a string.", {
-          sourceRecordId: "Provide a string value or leave the field blank.",
-        });
-      }
-      sourceRecordId = value;
-    }
-  }
-
-  let assetId: string | undefined;
-  if (definition.assetKey) {
-    const value = readMappedField(prepared.rawRecord, definition.assetKey);
-    if (value !== undefined && value !== null && value !== "") {
-      if (typeof value !== "string") {
-        throw recordFailure("The mapped asset key must be a string.", {
-          assetKey: "Provide an exact registered asset key or leave the field blank.",
-        });
-      }
-      const asset = await db
-        .selectFrom("assets")
-        .select(["id", "archived_at"])
-        .where("asset_key", "=", value)
-        .executeTakeFirst();
-      if (!asset || asset.archived_at !== null) {
-        throw recordFailure("The mapped asset key does not identify an active registered asset.", {
-          assetKey: "Use an exact active asset key from the registry.",
-        });
-      }
-      assetId = asset.id;
-    }
-  }
-
-  const payload = { ...(prepared.input.payload as JsonObject) };
-  for (const [target, sourcePath] of Object.entries(definition.payload ?? {})) {
-    const value = readMappedField(prepared.rawRecord, sourcePath);
-    if (value === undefined) {
-      throw recordFailure("A configured payload source field is missing.", {
-        [`payload.${target}`]: `Provide a value in the mapped source field ${sourcePath}.`,
-      });
-    }
-    if (Object.hasOwn(payload, target) && !isDeepStrictEqual(payload[target], value)) {
-      throw recordFailure("A mapped payload field conflicts with an existing payload value.", {
-        [`payload.${target}`]: "Rename the output field or remove the conflicting source payload key.",
-      });
-    }
-    Object.defineProperty(payload, target, {
-      value,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-
-  const fallbackKey = fallbackDeduplicationKey(relativePath, recordNumber);
-  return {
-    sourceId: prepared.input.sourceId,
-    eventType,
-    occurredAt,
-    sourceTimestamp: occurredAt,
-    ...(assetId ? { assetId } : {}),
-    ...(sourceRecordId !== undefined ? { sourceRecordId } : {}),
-    deduplicationKey: sourceRecordId?.trim() ? sourceRecordId : fallbackKey,
-    payload,
-    provenance: {
-      importFormat: format,
-      mappingVersion: version,
-      originalRecord: prepared.rawRecord,
-    },
-  };
+  const sourceId = prepared.input.sourceId;
+  if (typeof sourceId !== "string") throw recordFailure("The source identifier is invalid.");
+  return normalizeMappedEvent(
+    db,
+    sourceId,
+    prepared.rawRecord,
+    prepared.input.payload as JsonObject,
+    mapping,
+    fallbackDeduplicationKey(relativePath, recordNumber),
+    { importFormat: format },
+  );
 }
 
 function csvRecordToEventInput(
@@ -642,23 +560,7 @@ export function registerFileImportRoutes(
           `The registered ${format.toUpperCase()} source must reference a ${expectedExtension} file.`,
         );
       }
-      const activeRow = await db
-        .selectFrom("data_source_event_mappings")
-        .select(["version", "definition"])
-        .where("source_id", "=", source.id)
-        .where("status", "=", "active")
-        .executeTakeFirst();
-      let activeMapping: ActiveEventMapping | undefined;
-      if (activeRow) {
-        const validation = validateEventMappingDefinition(activeRow.definition);
-        if (!validation.valid) {
-          throw new ApiFailure(409, "ACTIVE_MAPPING_INVALID", "The active event mapping failed validation.");
-        }
-        activeMapping = {
-          version: activeRow.version,
-          definition: activeRow.definition as unknown as EventMappingDefinition,
-        };
-      }
+      const activeMapping = await getActiveEventMapping(db, source.id);
       const filePath = await resolveImportFile(importDirectory, configuration.relativePath);
       const bytes = await readBoundedFile(filePath);
       return processImport(db, source.id, configuration.relativePath, format, bytes, activeMapping);

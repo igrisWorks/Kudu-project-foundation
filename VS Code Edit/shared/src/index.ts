@@ -82,12 +82,21 @@ export const DATA_SOURCE_TYPES = [
 export type DataSourceType = (typeof DATA_SOURCE_TYPES)[number];
 export type ConnectorStatus = "not_implemented" | "connected" | "error" | "unsupported";
 export type DataSourceEnabledFilter = "all" | "enabled" | "disabled";
+export type RestApiAuthMode = "none" | "bearer";
 
 export type DataSourceConfigurationInput =
   | {
       kind: "rest_api";
       baseUrl: string;
+      endpointPath?: string;
+      method?: "GET";
+      authMode?: RestApiAuthMode;
       credentialRef?: string | null;
+      timeoutMs?: number;
+      maxResponseBytes?: number;
+      maxRecords?: number;
+      responseFormat?: "json";
+      recordsPath?: string;
     }
   | { kind: "json_file"; relativePath: string }
   | { kind: "csv_file"; relativePath: string }
@@ -98,6 +107,14 @@ export type DataSourceConfigurationMetadata =
       kind: "rest_api";
       baseUrl: string;
       credentialConfigured: boolean;
+      endpointPath?: string;
+      method?: "GET";
+      authMode?: RestApiAuthMode;
+      timeoutMs?: number;
+      maxResponseBytes?: number;
+      maxRecords?: number;
+      responseFormat?: "json";
+      recordsPath?: string;
     }
   | { kind: "json_file"; relativePath: string }
   | { kind: "csv_file"; relativePath: string }
@@ -251,6 +268,24 @@ export interface EventMappingValidationResult {
 
 export interface DataSourceEventMappingsResponse {
   items: DataSourceEventMapping[];
+}
+
+export interface RestSyncRecordError {
+  record: number;
+  code: string;
+  message: string;
+  fields?: Record<string, string>;
+}
+
+export interface RestSyncResult {
+  sourceId: string;
+  requestSucceeded: boolean;
+  fetched: number;
+  imported: number;
+  duplicates: number;
+  failed: number;
+  errors: RestSyncRecordError[];
+  errorsTruncated: boolean;
 }
 
 export interface EventListFilters {

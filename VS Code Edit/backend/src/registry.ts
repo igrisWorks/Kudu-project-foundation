@@ -169,6 +169,14 @@ function sourceConfigurationMetadata(
         kind: "rest_api",
         baseUrl: configuration.baseUrl,
         credentialConfigured: Boolean(configuration.credentialRef),
+        ...(configuration.endpointPath !== undefined ? { endpointPath: configuration.endpointPath } : {}),
+        ...(configuration.method !== undefined ? { method: configuration.method } : {}),
+        ...(configuration.authMode !== undefined ? { authMode: configuration.authMode } : {}),
+        ...(configuration.timeoutMs !== undefined ? { timeoutMs: configuration.timeoutMs } : {}),
+        ...(configuration.maxResponseBytes !== undefined ? { maxResponseBytes: configuration.maxResponseBytes } : {}),
+        ...(configuration.maxRecords !== undefined ? { maxRecords: configuration.maxRecords } : {}),
+        ...(configuration.responseFormat !== undefined ? { responseFormat: configuration.responseFormat } : {}),
+        ...(configuration.recordsPath !== undefined ? { recordsPath: configuration.recordsPath } : {}),
       };
     case "json_file":
     case "csv_file":
@@ -217,18 +225,25 @@ function mergeRestCredential(
   if (incoming.kind !== "rest_api") return incoming;
   const currentReference =
     current?.kind === "rest_api" ? current.credentialRef : undefined;
+  const { credentialRef, ...configuration } = incoming;
+  let merged: StoredSourceConfiguration;
   if (!Object.hasOwn(incoming, "credentialRef")) {
-    return {
-      kind: "rest_api",
-      baseUrl: incoming.baseUrl,
+    merged = {
+      ...configuration,
       ...(currentReference ? { credentialRef: currentReference } : {}),
     };
+  } else {
+    merged = {
+      ...configuration,
+      ...(credentialRef ? { credentialRef } : {}),
+    };
   }
-  return {
-    kind: "rest_api",
-    baseUrl: incoming.baseUrl,
-    ...(incoming.credentialRef ? { credentialRef: incoming.credentialRef } : {}),
-  };
+  if (merged.kind === "rest_api" && merged.authMode === "bearer" && !merged.credentialRef) {
+    throw new ApiFailure(400, "VALIDATION_ERROR", "A bearer token environment reference is required.", {
+      "configuration.credentialRef": "Set a credential reference or select no authentication.",
+    });
+  }
+  return merged;
 }
 
 async function ensureParent(

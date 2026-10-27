@@ -13,7 +13,19 @@ import type {
 type TimestampColumn = ColumnType<Date, Date | string | undefined, Date | string | undefined>;
 
 export type StoredSourceConfiguration =
-  | { kind: "rest_api"; baseUrl: string; credentialRef?: string }
+  | {
+      kind: "rest_api";
+      baseUrl: string;
+      endpointPath?: string;
+      method?: "GET";
+      authMode?: "none" | "bearer";
+      credentialRef?: string;
+      timeoutMs?: number;
+      maxResponseBytes?: number;
+      maxRecords?: number;
+      responseFormat?: "json";
+      recordsPath?: string;
+    }
   | { kind: "json_file"; relativePath: string }
   | { kind: "csv_file"; relativePath: string }
   | { kind: "manual" };

@@ -70,7 +70,11 @@ Example:
 | `GET` | `/api/v1/data-sources/{id}` | Get metadata and redacted configuration status. |
 | `PATCH` | `/api/v1/data-sources/{id}` | Update supplied metadata. Changing source type requires matching configuration. |
 
-Supported source types are `rest_api`, `json_file`, `csv_file`, and `manual`. REST configuration accepts an HTTP(S) base URL without credentials, query parameters, or fragments. An optional credential reference must have the form `env:KUDU_SOURCE_NAME`; the API stores only the reference and returns only `credentialConfigured`, never the reference or secret value. The referenced variable must be provisioned out of band. File-source paths must be relative to the configured import directory. Registration alone never opens a file, connects to a source, or starts outbound traffic.
+Supported source types are `rest_api`, `json_file`, `csv_file`, and `manual`. REST configuration accepts an HTTP(S) base URL without credentials, query parameters, or fragments, plus a relative endpoint path. Only `GET` and JSON responses are supported. Configure the JSON records path (a dot path or blank for a top-level array), timeout, response-size limit, and record-count limit.
+
+Authentication is either `none` or `bearer`. Bearer authentication requires HTTPS and an environment-variable reference such as `env:KUDU_SOURCE_ERP_TOKEN`. The referenced variable must be provisioned out of band. The API returns only whether a reference is configured; it never returns the reference or secret value. A reference from an older registry version is inactive unless `authMode` is `bearer`.
+
+Registration, editing, viewing, and listing never make outbound requests. Only the explicit sync endpoint connects to a REST source. File-source paths must be relative to the configured import directory.
 
 Example:
 
@@ -82,7 +86,15 @@ Example:
   "configuration": {
     "kind": "rest_api",
     "baseUrl": "https://erp.example.test/api",
-    "credentialRef": "env:KUDU_SOURCE_ERP_TOKEN"
+    "endpointPath": "v1/events",
+    "method": "GET",
+    "authMode": "bearer",
+    "credentialRef": "env:KUDU_SOURCE_ERP_TOKEN",
+    "timeoutMs": 10000,
+    "maxResponseBytes": 1048576,
+    "maxRecords": 500,
+    "responseFormat": "json",
+    "recordsPath": "data.events"
   }
 }
 ```

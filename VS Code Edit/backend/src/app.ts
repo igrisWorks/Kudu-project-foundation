@@ -11,6 +11,7 @@ import { registerEventRoutes } from "./events.js";
 import { registerFileImportRoutes } from "./file-import.js";
 import { registerEventMappingRoutes } from "./event-mappings.js";
 import { registerRegistryRoutes } from "./registry.js";
+import { registerRestSyncRoutes } from "./rest-sync.js";
 import type { Kysely } from "kysely";
 
 interface AppOptions {
@@ -18,6 +19,8 @@ interface AppOptions {
   staticDirectory?: string;
   logLevel?: string;
   importDirectory?: string;
+  restTrustedHosts?: string[];
+  allowLoopbackRestTests?: boolean;
   databaseCheck?: (db: Kysely<Database>) => Promise<void>;
 }
 
@@ -122,6 +125,10 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   registerRegistryRoutes(app, options.db);
   registerEventRoutes(app, options.db);
   registerEventMappingRoutes(app, options.db);
+  registerRestSyncRoutes(app, options.db, {
+    trustedHosts: options.restTrustedHosts,
+    allowLoopbackForTests: options.allowLoopbackRestTests === true,
+  });
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const importDirectory = resolve(
     projectRoot,

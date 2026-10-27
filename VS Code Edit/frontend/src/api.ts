@@ -21,6 +21,7 @@ import type {
   IngestEventInput,
   IngestEventResponse,
   Page,
+  RestSyncResult,
 } from "@kudu/shared";
 
 export interface ListQuery {
@@ -150,6 +151,12 @@ export function updateDataSource(
 
 export function importDataSourceFile(id: string): Promise<FileImportResult> {
   return request(`/api/v1/data-sources/${encodeURIComponent(id)}/import`, {
+    method: "POST",
+  });
+}
+
+export function syncRestDataSource(id: string): Promise<RestSyncResult> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}/sync`, {
     method: "POST",
   });
 }

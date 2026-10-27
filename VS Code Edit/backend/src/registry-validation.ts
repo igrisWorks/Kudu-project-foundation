@@ -252,6 +252,68 @@ function parseRelativePath(value: unknown, errors: Errors): string {
   return normalized;
 }
 
+function optionalInteger(
+  input: Input,
+  field: string,
+  minimum: number,
+  maximum: number,
+  errors: Errors,
+): number | undefined {
+  if (!Object.hasOwn(input, field)) return undefined;
+  const value = input[field];
+  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) {
+    errors[`configuration.${field}`] = `Use a whole number from ${minimum} to ${maximum}.`;
+    return undefined;
+  }
+  return value;
+}
+
+function parseEndpointPath(value: unknown, errors: Errors): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    errors["configuration.endpointPath"] = "A relative endpoint path is required.";
+    return undefined;
+  }
+  const normalized = value.trim();
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(normalized);
+  } catch {
+    errors["configuration.endpointPath"] = "Use a valid URL path.";
+    return undefined;
+  }
+  if (
+    normalized.length > 512 ||
+    /[?#\\\0]/.test(normalized) ||
+    normalized.includes("://") ||
+    decoded.split("/").some((part) => part === "." || part === "..")
+  ) {
+    errors["configuration.endpointPath"] = "Use a relative path without query, fragment, or traversal segments.";
+    return undefined;
+  }
+  return normalized.replace(/^\/+/, "");
+}
+
+function parseRecordsPath(value: unknown, errors: Errors): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length > 256) {
+    errors["configuration.recordsPath"] = "Use an optional dot-separated path of at most 256 characters.";
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) return "";
+  const parts = normalized.split(".");
+  if (
+    parts.length > 8 ||
+    parts.some((part) => !part || part.length > 128 || part.trim() !== part ||
+      ["__proto__", "constructor", "prototype"].includes(part))
+  ) {
+    errors["configuration.recordsPath"] = "Use a safe dot-separated JSON object path, with at most eight parts.";
+    return undefined;
+  }
+  return normalized;
+}
+
 function parseConfiguration(
   value: unknown,
   sourceType: DataSourceType,
@@ -268,11 +330,20 @@ function parseConfiguration(
   }
 
   if (sourceType === "rest_api") {
-    unknownFields(value, ["kind", "baseUrl", "credentialRef"], errors);
+    unknownFields(
+      value,
+      [
+        "kind", "baseUrl", "endpointPath", "method", "authMode", "credentialRef",
+        "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath",
+      ],
+      errors,
+    );
     const baseUrl = requiredText(value, "baseUrl", 2000, errors);
+    let baseProtocol = "";
     if (baseUrl) {
       try {
         const parsed = new URL(baseUrl);
+        baseProtocol = parsed.protocol;
         if (
           (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
           !parsed.hostname ||
@@ -287,6 +358,24 @@ function parseConfiguration(
       } catch {
         errors["configuration.baseUrl"] = "Enter a valid HTTP or HTTPS URL.";
       }
+    }
+
+    const endpointPath = parseEndpointPath(value.endpointPath, errors);
+    let method: "GET" | undefined;
+    if (Object.hasOwn(value, "method")) {
+      if (value.method !== "GET") errors["configuration.method"] = "Only GET is supported.";
+      else method = "GET";
+    }
+    let authMode: "none" | "bearer" | undefined;
+    if (Object.hasOwn(value, "authMode")) {
+      if (value.authMode !== "none" && value.authMode !== "bearer") {
+        errors["configuration.authMode"] = "Choose no authentication or a bearer token.";
+      } else {
+        authMode = value.authMode;
+      }
+    }
+    if (authMode === "bearer" && baseProtocol !== "https:") {
+      errors["configuration.authMode"] = "Bearer authentication requires an HTTPS base URL.";
     }
 
     let credentialRef: string | null | undefined;
@@ -304,11 +393,32 @@ function parseConfiguration(
           "Use a reference such as env:KUDU_SOURCE_PLANT_API_TOKEN; do not enter a credential value.";
       }
     }
+    if (authMode === "bearer" && credentialRef === null) {
+      errors["configuration.credentialRef"] = "A bearer token reference is required; clear authentication mode to remove it.";
+    }
+
+    let responseFormat: "json" | undefined;
+    if (Object.hasOwn(value, "responseFormat")) {
+      if (value.responseFormat !== "json") errors["configuration.responseFormat"] = "Only JSON responses are supported.";
+      else responseFormat = "json";
+    }
+    const timeoutMs = optionalInteger(value, "timeoutMs", 500, 30_000, errors);
+    const maxResponseBytes = optionalInteger(value, "maxResponseBytes", 1024, 5 * 1024 * 1024, errors);
+    const maxRecords = optionalInteger(value, "maxRecords", 1, 1000, errors);
+    const recordsPath = parseRecordsPath(value.recordsPath, errors);
 
     return {
       kind: "rest_api",
       baseUrl,
+      ...(endpointPath !== undefined ? { endpointPath } : {}),
+      ...(method !== undefined ? { method } : {}),
+      ...(authMode !== undefined ? { authMode } : {}),
       ...(credentialRef !== undefined ? { credentialRef } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
+      ...(maxRecords !== undefined ? { maxRecords } : {}),
+      ...(responseFormat !== undefined ? { responseFormat } : {}),
+      ...(recordsPath !== undefined ? { recordsPath } : {}),
     };
   }
 

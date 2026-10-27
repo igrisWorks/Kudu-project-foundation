@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page } from "@kudu/shared";
-import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
+import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page, type RestApiAuthMode, type RestSyncResult } from "@kudu/shared";
+import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, syncRestDataSource, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
 import { ConnectorBadge, displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
 const PAGE_SIZE = 15;
@@ -17,6 +17,7 @@ function mapDataSourceErrors(fields: Record<string, string>): Record<string, str
     if (key === "configuration.baseUrl") mapped.baseUrl = message;
     else if (key === "configuration.relativePath") mapped.relativePath = message;
     else if (key === "configuration.credentialRef") mapped.credentialRef = message;
+    else if (key.startsWith("configuration.")) mapped[key.slice("configuration.".length)] = message;
     else mapped[key] = message;
   }
   return mapped;
@@ -74,6 +75,9 @@ function DataSourceDetailPage() {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
   const [importResult, setImportResult] = useState<FileImportResult | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const [syncResult, setSyncResult] = useState<RestSyncResult | null>(null);
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try { setRecord(await getDataSource(id)); } catch (cause) { setError(displayError(cause)); }
@@ -86,15 +90,23 @@ function DataSourceDetailPage() {
     catch (cause) { setImportError(displayError(cause)); }
     finally { setImporting(false); }
   }
+  async function runRestSync() {
+    setSyncing(true); setSyncError(""); setSyncResult(null);
+    try { setSyncResult(await syncRestDataSource(id)); }
+    catch (cause) { setSyncError(displayError(cause)); }
+    finally { setSyncing(false); }
+  }
   if (loading) return <main className="page-main"><LoadingState label="Loading the actual data source record…" /></main>;
   if (error || !record) return <main className="page-main"><ErrorState title="Data source unavailable" message={error || "The requested source was not returned by the API."} retry={() => void load()} back="/data-sources" /></main>;
   const cfg = record.configuration;
   const fileFormat = record.sourceType === "csv_file" ? "CSV" : record.sourceType === "json_file" ? "JSON" : null;
+  const isRestSource = record.sourceType === "rest_api" && cfg.kind === "rest_api";
   return <main className="page-main">
     <div className="detail-heading"><Link href="/data-sources" className="back-link" data-testid="link-back-data-sources">← All data sources</Link>
       <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />DATA SOURCE RECORD</div><h1>{record.displayName}</h1><span className="detail-key" data-testid="text-data-source-key">{record.sourceKey}</span></div>
         <div className="detail-actions">
           {fileFormat && record.enabled && <button className="button button-primary" type="button" onClick={() => void runFileImport()} disabled={importing} data-testid="button-import-source-file">{importing ? "Importing…" : `Import configured ${fileFormat} file`}</button>}
+          {isRestSource && record.enabled && <button className="button button-primary" type="button" onClick={() => void runRestSync()} disabled={syncing} data-testid="button-sync-rest-source">{syncing ? "Syncing…" : "Sync now"}</button>}
           <Link className="button" href={`/data-sources/${encodeURIComponent(id)}/edit`} data-testid="button-edit-data-source">Edit record</Link>
         </div>
       </div>
@@ -102,9 +114,12 @@ function DataSourceDetailPage() {
     <div className="notice" data-testid="notice-source-import">
       {fileFormat
         ? <><strong>{fileFormat} file import is available.</strong> Imports read the registered relative file from the configured local import directory. {record.enabled ? "Imports run only when requested and are not scheduled." : "Enable this source before importing. No import is started while disabled."}</>
-        : <><strong>File import is not supported for this source type.</strong> Only enabled CSV and JSON file sources can be imported. REST API and manual sources do not connect or start outbound traffic.</>}
+        : isRestSource
+          ? <><strong>REST sync is read-only and on demand.</strong> Kudu sends a bounded GET request only when you select Sync now. No source is polled or scheduled.</>
+          : <><strong>Manual source.</strong> This reference record does not connect or start ingestion.</>}
     </div>
     {importError && <div className="notice error" role="alert" data-testid="error-file-import"><strong>Import failed.</strong> {importError}</div>}
+    {syncError && <div className="notice error" role="alert" data-testid="error-rest-sync"><strong>Sync could not run.</strong> {syncError}</div>}
     {importResult && <section className="panel file-import-result" data-testid="panel-file-import-result">
       <h2 className="panel-title">Import result · {importResult.format.toUpperCase()}</h2>
       <p data-testid="text-file-import-counts">
@@ -118,6 +133,19 @@ function DataSourceDetailPage() {
       </ul>}
       {importResult.errorsTruncated && <p className="field-hint">Only the first {importResult.errors.length} record errors are displayed.</p>}
     </section>}
+    {syncResult && <section className="panel file-import-result" data-testid="panel-rest-sync-result">
+      <h2 className="panel-title">REST sync · {syncResult.requestSucceeded ? (syncResult.failed ? "completed with failures" : "completed") : "request failed"}</h2>
+      <p data-testid="text-rest-sync-counts">
+        {syncResult.fetched} fetched, {syncResult.imported} imported, {syncResult.duplicates} duplicates, {syncResult.failed} failed.
+      </p>
+      {syncResult.errors.length > 0 && <ul className="file-import-errors" data-testid="list-rest-sync-errors">
+        {syncResult.errors.map((item, index) => <li key={`${item.record}-${item.code}-${index}`}>
+          <strong>{item.record === 0 ? "Request" : `Record ${item.record}`} · {item.code}</strong>: {item.message}
+          {item.fields && <span className="file-import-field-errors"> {Object.values(item.fields).join(" ")}</span>}
+        </li>)}
+      </ul>}
+      {syncResult.errorsTruncated && <p className="field-hint">Only the first {syncResult.errors.length} errors are displayed.</p>}
+    </section>}
     <div className="detail-grid">
       <section className="panel"><h2 className="panel-title">Source metadata</h2><dl className="definition-list">
         <dt>Source key</dt><dd className="mono">{record.sourceKey}</dd><dt>Type</dt><dd>{sourceLabels[record.sourceType]}</dd>
@@ -128,7 +156,17 @@ function DataSourceDetailPage() {
       <div className="stack">
         <section className="panel"><h2 className="panel-title">Configuration metadata</h2><dl className="definition-list">
           <dt>Configuration type</dt><dd>{sourceLabels[cfg.kind]}</dd>
-          {cfg.kind === "rest_api" && <><dt>Base URL</dt><dd className="mono" data-testid="text-source-base-url">{cfg.baseUrl}</dd><dt>Credential reference</dt><dd>{cfg.credentialConfigured ? "Configured; secret/reference value is not returned by the API." : "No credential reference recorded."}</dd></>}
+          {cfg.kind === "rest_api" && <>
+            <dt>Base URL</dt><dd className="mono" data-testid="text-source-base-url">{cfg.baseUrl}</dd>
+            <dt>Endpoint path</dt><dd className="mono">{cfg.endpointPath || "Not configured"}</dd>
+            <dt>Method</dt><dd>{cfg.method ?? "GET"}</dd>
+            <dt>Response format</dt><dd>{(cfg.responseFormat ?? "json").toUpperCase()}</dd>
+            <dt>Records path</dt><dd className="mono">{cfg.recordsPath || "Top-level JSON array"}</dd>
+            <dt>Authentication</dt><dd>{cfg.authMode === "bearer"
+              ? cfg.credentialConfigured ? "Bearer token via environment variable is configured." : "Bearer token reference is unavailable."
+              : cfg.credentialConfigured ? "No authentication; an inactive credential reference is recorded." : "None."}</dd>
+            <dt>Request limits</dt><dd>{cfg.timeoutMs ?? 10000} ms · {((cfg.maxResponseBytes ?? 1048576) / 1048576).toFixed(1)} MiB · {cfg.maxRecords ?? 500} records</dd>
+          </>}
           {(cfg.kind === "json_file" || cfg.kind === "csv_file") && <><dt>Relative path</dt><dd className="mono" data-testid="text-source-path">{cfg.relativePath}</dd></>}
           {cfg.kind === "manual" && <><dt>Reference</dt><dd>{cfg.referenceOnly ? "Manual reference only" : "Not available"}</dd></>}
         </dl></section>
@@ -138,6 +176,11 @@ function DataSourceDetailPage() {
             <dt>Availability</dt><dd>{record.enabled ? "Available for on-demand import" : "Disabled in registry"}</dd>
             <dt>Run history</dt><dd>Not stored; each result is returned after its import request.</dd>
           </dl></section>
+        : isRestSource
+          ? <section className="panel" data-testid="panel-rest-sync-status"><h2 className="panel-title">REST sync</h2><dl className="definition-list">
+            <dt>Availability</dt><dd>{record.enabled ? "Available for operator-triggered sync" : "Disabled in registry"}</dd>
+            <dt>Run history</dt><dd>Not stored; each result is returned after the request.</dd>
+          </dl></section>
           : <section className="panel"><h2 className="panel-title">Connector and ingestion status</h2><dl className="definition-list">
             <dt>Connection</dt><dd><ConnectorBadge status={record.connectionStatus} /></dd><dt>Ingestion</dt><dd><ConnectorBadge status={record.ingestionStatus} /></dd>
             <dt>Last successful sync</dt><dd className="time-label" data-testid="text-last-sync">{formatDate(record.lastSuccessfulSyncAt)}</dd>
@@ -145,11 +188,11 @@ function DataSourceDetailPage() {
           </dl></section>}
       </div>
     </div>
-    {fileFormat && <EventMappingPanel sourceId={id} />}
+    {(fileFormat || isRestSource) && <EventMappingPanel sourceId={id} restSource={isRestSource} />}
   </main>;
 }
 
-function EventMappingPanel({ sourceId }: { sourceId: string }) {
+function EventMappingPanel({ sourceId, restSource = false }: { sourceId: string; restSource?: boolean }) {
   const [mappings, setMappings] = useState<DataSourceEventMapping[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -280,7 +323,7 @@ function EventMappingPanel({ sourceId }: { sourceId: string }) {
     <div className="panel-heading-row">
       <div>
         <h2 className="panel-title">Event mapping</h2>
-        <p className="field-hint">Explicit field paths normalize new CSV/JSON imports. Prior events are never rewritten.</p>
+        <p className="field-hint">Explicit field paths normalize new CSV/JSON imports and REST syncs. Prior events are never rewritten.</p>
       </div>
       {!draftMapping && <button className="button" type="button" onClick={() => void createDraft()} disabled={busy || loading} data-testid="button-create-mapping-draft">
         {activeMapping ? "Create next version" : "Create mapping draft"}
@@ -290,8 +333,8 @@ function EventMappingPanel({ sourceId }: { sourceId: string }) {
     {error && <div className="notice error" role="alert" data-testid="error-event-mapping">{error}</div>}
     {!loading && <>
       {activeMapping
-        ? <p data-testid="text-active-mapping">Active version {activeMapping.version}. Imports started after activation use this version; existing events are unchanged.</p>
-        : <p data-testid="text-no-active-mapping">No active mapping. File imports keep the existing field behavior.</p>}
+        ? <p data-testid="text-active-mapping">Active version {activeMapping.version}. New imports and REST syncs use this version; existing events are unchanged.</p>
+        : <p data-testid="text-no-active-mapping">{restSource ? "No active mapping. REST sync requires an active event mapping." : "No active mapping. File imports keep the existing field behavior."}</p>}
       <ul className="mapping-version-list" data-testid="list-mapping-versions">
         {mappings.map((mapping) => <li key={mapping.id}>
           <strong>v{mapping.version}</strong>
@@ -321,7 +364,7 @@ function EventMappingPanel({ sourceId }: { sourceId: string }) {
           <button className="button button-primary" type="button" onClick={() => void activateDraft()} disabled={busy || dirty || !draftMapping.validatedAt || draftMapping.validationErrors.length > 0} data-testid="button-activate-mapping">Activate version {draftMapping.version}</button>
         </div>
       </div>}
-      {mappings.length === 0 && <p className="field-hint">Without an active mapping, imports use the current CSV/JSON field behavior.</p>}
+      {mappings.length === 0 && <p className="field-hint">{restSource ? "Create, validate, and activate a mapping before syncing." : "Without an active mapping, imports use the current CSV/JSON field behavior."}</p>}
     </>}
   </section>;
 }
@@ -334,6 +377,9 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   const [sourceKey, setSourceKey] = useState(""); const [displayName, setDisplayName] = useState("");
   const [type, setType] = useState<DataSourceType>("rest_api"); const [description, setDescription] = useState("");
   const [baseUrl, setBaseUrl] = useState(""); const [relativePath, setRelativePath] = useState("");
+  const [endpointPath, setEndpointPath] = useState(""); const [recordsPath, setRecordsPath] = useState("");
+  const [authMode, setAuthMode] = useState<RestApiAuthMode>("none");
+  const [timeoutMs, setTimeoutMs] = useState("10000"); const [maxResponseBytes, setMaxResponseBytes] = useState("1048576"); const [maxRecords, setMaxRecords] = useState("500");
   const [credentialRef, setCredentialRef] = useState(""); const [credentialConfigured, setCredentialConfigured] = useState(false);
   const [clearCredential, setClearCredential] = useState(false); const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
@@ -348,7 +394,16 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       if (!active) return;
       setSourceKey(record.sourceKey); setDisplayName(record.displayName); setType(record.sourceType);
       setDescription(record.description ?? ""); setEnabled(record.enabled);
-      if (record.configuration.kind === "rest_api") { setBaseUrl(record.configuration.baseUrl); setCredentialConfigured(record.configuration.credentialConfigured); }
+      if (record.configuration.kind === "rest_api") {
+        setBaseUrl(record.configuration.baseUrl);
+        setEndpointPath(record.configuration.endpointPath ?? "");
+        setRecordsPath(record.configuration.recordsPath ?? "");
+        setAuthMode(record.configuration.authMode ?? "none");
+        setTimeoutMs(String(record.configuration.timeoutMs ?? 10000));
+        setMaxResponseBytes(String(record.configuration.maxResponseBytes ?? 1048576));
+        setMaxRecords(String(record.configuration.maxRecords ?? 500));
+        setCredentialConfigured(record.configuration.credentialConfigured);
+      }
       if (record.configuration.kind === "json_file" || record.configuration.kind === "csv_file") setRelativePath(record.configuration.relativePath);
     }).catch(cause => { if (active) setLoadError(displayError(cause)); }).finally(() => { if (active) setInitialLoading(false); });
     return () => { active = false; };
@@ -360,6 +415,15 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
     if (type === "rest_api") {
       if (!baseUrl.trim()) errors.baseUrl = "REST base URL is required.";
       else { try { const url = new URL(baseUrl); if (url.protocol !== "http:" && url.protocol !== "https:") errors.baseUrl = "Use an HTTP or HTTPS URL."; } catch { errors.baseUrl = "Enter a valid absolute URL."; } }
+      if (!endpointPath.trim()) errors.endpointPath = "Endpoint path is required.";
+      if (authMode === "bearer" && !credentialConfigured && !credentialRef.trim()) errors.credentialRef = "A bearer token environment-variable reference is required.";
+      if (authMode === "bearer" && baseUrl.trim()) {
+        try { if (new URL(baseUrl).protocol !== "https:") errors.authMode = "Bearer authentication requires HTTPS."; } catch { /* Base URL error is shown above. */ }
+      }
+      const timeout = Number(timeoutMs); const responseLimit = Number(maxResponseBytes); const recordLimit = Number(maxRecords);
+      if (!Number.isInteger(timeout) || timeout < 500 || timeout > 30000) errors.timeoutMs = "Use a whole number from 500 to 30000.";
+      if (!Number.isInteger(responseLimit) || responseLimit < 1024 || responseLimit > 5242880) errors.maxResponseBytes = "Use a whole number from 1024 to 5242880.";
+      if (!Number.isInteger(recordLimit) || recordLimit < 1 || recordLimit > 1000) errors.maxRecords = "Use a whole number from 1 to 1000.";
     }
     if ((type === "json_file" || type === "csv_file") && !relativePath.trim()) errors.relativePath = "Relative path is required.";
     setFieldErrors(errors); setValidation(Object.keys(errors).length ? "Review the fields marked below." : "");
@@ -373,7 +437,19 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       const credential: { credentialRef?: string | null } = {};
       if (clearCredential) credential.credentialRef = null;
       else if (credentialRef.trim()) credential.credentialRef = credentialRef.trim();
-      configuration = { kind: "rest_api", baseUrl: baseUrl.trim(), ...credential };
+      configuration = {
+        kind: "rest_api",
+        baseUrl: baseUrl.trim(),
+        endpointPath: endpointPath.trim(),
+        method: "GET",
+        authMode,
+        timeoutMs: Number(timeoutMs),
+        maxResponseBytes: Number(maxResponseBytes),
+        maxRecords: Number(maxRecords),
+        responseFormat: "json",
+        recordsPath: recordsPath.trim(),
+        ...credential,
+      };
     } else if (type === "json_file" || type === "csv_file") configuration = { kind: type, relativePath: relativePath.trim() };
     else configuration = { kind: "manual" };
     setBusy(true);
@@ -405,10 +481,55 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       </div>
       <div className="form-section"><h2>Type-specific configuration</h2><p>Only configuration fields supported by the selected source type are shown.</p></div>
       {type === "rest_api" && <div className="form-grid">
-        <div className="field span-2"><label htmlFor="rest-base-url">REST base URL *</label><input id="rest-base-url" data-testid="input-rest-base-url" value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://host.example/api" aria-invalid={Boolean(fieldErrors.baseUrl)} aria-describedby={fieldErrors.baseUrl ? "rest-base-url-error" : undefined} />{fieldErrors.baseUrl && <span className="field-error" id="rest-base-url-error" data-testid="error-source-base-url">{fieldErrors.baseUrl}</span>}<span className="field-hint">Stored as metadata only. Kudu will not make a request to this URL.</span></div>
-        <div className="field span-2"><label htmlFor="credential-reference">Credential environment-variable reference</label><input id="credential-reference" data-testid="input-credential-reference" value={credentialRef} onChange={event => { setCredentialRef(event.target.value); setClearCredential(false); }} placeholder={editing && credentialConfigured ? "Existing reference is configured" : "Optional environment-variable name"} autoComplete="off" aria-invalid={Boolean(fieldErrors.credentialRef)} aria-describedby={fieldErrors.credentialRef ? "credential-reference-error" : undefined} /><span className="field-hint">{editing ? "The API redacts this value. Leave blank to preserve the existing reference; entered text replaces it." : "Optional name/reference only. Do not enter a secret value."}</span>{fieldErrors.credentialRef && <span className="field-error" id="credential-reference-error" data-testid="error-source-credential-ref">{fieldErrors.credentialRef}</span>}
+        <div className="field span-2">
+          <label htmlFor="rest-base-url">REST base URL *</label>
+          <input id="rest-base-url" data-testid="input-rest-base-url" value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://host.example/api" aria-invalid={Boolean(fieldErrors.baseUrl)} aria-describedby={fieldErrors.baseUrl ? "rest-base-url-error" : undefined} />
+          {fieldErrors.baseUrl && <span className="field-error" id="rest-base-url-error" data-testid="error-source-base-url">{fieldErrors.baseUrl}</span>}
+          <span className="field-hint">Registration and editing do not make a request. A request occurs only when an operator starts a sync.</span>
+        </div>
+        <div className="field span-2">
+          <label htmlFor="rest-endpoint-path">Endpoint path *</label>
+          <input id="rest-endpoint-path" data-testid="input-rest-endpoint-path" value={endpointPath} onChange={event => setEndpointPath(event.target.value)} placeholder="v1/events" aria-invalid={Boolean(fieldErrors.endpointPath)} />
+          {fieldErrors.endpointPath && <span className="field-error">{fieldErrors.endpointPath}</span>}
+          <span className="field-hint">Relative to the base URL. Only GET is supported.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="rest-auth-mode">Authentication</label>
+          <select id="rest-auth-mode" data-testid="select-rest-auth-mode" value={authMode} onChange={event => setAuthMode(event.target.value as RestApiAuthMode)} aria-invalid={Boolean(fieldErrors.authMode)}>
+            <option value="none">None</option><option value="bearer">Bearer token</option>
+          </select>
+          {fieldErrors.authMode && <span className="field-error">{fieldErrors.authMode}</span>}
+          <span className="field-hint">Bearer tokens are sent only over HTTPS.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="credential-reference">Bearer token environment reference</label>
+          <input id="credential-reference" data-testid="input-credential-reference" value={credentialRef} onChange={event => { setCredentialRef(event.target.value); setClearCredential(false); }} placeholder={editing && credentialConfigured ? "Existing reference is configured" : "env:KUDU_SOURCE_ERP_TOKEN"} autoComplete="off" aria-invalid={Boolean(fieldErrors.credentialRef)} />
+          {fieldErrors.credentialRef && <span className="field-error" data-testid="error-source-credential-ref">{fieldErrors.credentialRef}</span>}
+          <span className="field-hint">{editing ? "The reference is redacted. Leave blank to preserve it; entered text replaces it." : "Reference only. Provision the environment variable separately; never enter its secret value here."}</span>
           {editing && credentialConfigured && <label className="check-row"><input type="checkbox" checked={clearCredential} onChange={event => { setClearCredential(event.target.checked); if (event.target.checked) setCredentialRef(""); }} data-testid="checkbox-clear-credential-reference" /><span>Clear existing credential reference on save</span></label>}
         </div>
+        <div className="field">
+          <label htmlFor="rest-timeout">Timeout (ms)</label>
+          <input id="rest-timeout" type="number" min="500" max="30000" step="1" value={timeoutMs} onChange={event => setTimeoutMs(event.target.value)} aria-invalid={Boolean(fieldErrors.timeoutMs)} />
+          {fieldErrors.timeoutMs && <span className="field-error">{fieldErrors.timeoutMs}</span>}
+        </div>
+        <div className="field">
+          <label htmlFor="rest-max-response">Maximum response bytes</label>
+          <input id="rest-max-response" type="number" min="1024" max="5242880" step="1024" value={maxResponseBytes} onChange={event => setMaxResponseBytes(event.target.value)} aria-invalid={Boolean(fieldErrors.maxResponseBytes)} />
+          {fieldErrors.maxResponseBytes && <span className="field-error">{fieldErrors.maxResponseBytes}</span>}
+        </div>
+        <div className="field">
+          <label htmlFor="rest-max-records">Maximum records</label>
+          <input id="rest-max-records" type="number" min="1" max="1000" step="1" value={maxRecords} onChange={event => setMaxRecords(event.target.value)} aria-invalid={Boolean(fieldErrors.maxRecords)} />
+          {fieldErrors.maxRecords && <span className="field-error">{fieldErrors.maxRecords}</span>}
+        </div>
+        <div className="field">
+          <label htmlFor="rest-records-path">JSON records path</label>
+          <input id="rest-records-path" data-testid="input-rest-records-path" value={recordsPath} onChange={event => setRecordsPath(event.target.value)} placeholder="data.events" aria-invalid={Boolean(fieldErrors.recordsPath)} />
+          {fieldErrors.recordsPath && <span className="field-error">{fieldErrors.recordsPath}</span>}
+          <span className="field-hint">Dot path to the array; leave blank when the response is an array.</span>
+        </div>
+        <div className="field"><span className="field-label">Response format</span><span className="field-hint">JSON only</span></div>
       </div>}
       {(type === "json_file" || type === "csv_file") && <div className="field"><label htmlFor="source-relative-path">Relative file path *</label><input id="source-relative-path" data-testid="input-source-relative-path" value={relativePath} onChange={event => setRelativePath(event.target.value)} placeholder="data/measurements.csv" aria-invalid={Boolean(fieldErrors.relativePath)} aria-describedby={fieldErrors.relativePath ? "source-relative-path-error" : undefined} />{fieldErrors.relativePath && <span className="field-error" id="source-relative-path-error" data-testid="error-source-relative-path">{fieldErrors.relativePath}</span>}<span className="field-hint">Relative to the configured local data root; no file is read by this workflow.</span></div>}
       {type === "manual" && <div className="notice" data-testid="notice-manual-source">Manual source is a reference record. No external connection or ingestion is available.</div>}
