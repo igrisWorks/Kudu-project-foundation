@@ -5,6 +5,7 @@ import type {
   ConnectorStatus,
   DataSourceType,
   ExternalIdentifier,
+  JsonObject,
 } from "@kudu/shared";
 
 type TimestampColumn = ColumnType<Date, Date | string | undefined, Date | string | undefined>;
@@ -44,9 +45,25 @@ interface DataSourcesTable {
   updated_at: TimestampColumn;
 }
 
+interface EventsTable {
+  id: Generated<string>;
+  source_id: string;
+  asset_id: string | null;
+  source_record_id: string | null;
+  event_type: string;
+  occurred_at: TimestampColumn;
+  ingested_at: Generated<Date>;
+  source_timestamp: string;
+  deduplication_key: string | null;
+  ingestion_fingerprint: string | null;
+  payload: ColumnType<JsonObject, string, string>;
+  provenance: ColumnType<JsonObject, string, string>;
+}
+
 export interface Database {
   assets: AssetsTable;
   data_sources: DataSourcesTable;
+  events: EventsTable;
 }
 
 export function createDatabase(connectionString: string): {

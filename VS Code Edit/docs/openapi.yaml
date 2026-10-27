@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
-  title: Kudu Registry API
+  title: Kudu Registry and Events API
   version: 0.1.0
   summary: Asset and data-source registry API
   description: |
-    Versioned API for Kudu's asset and data-source registries.
+    Versioned API for Kudu's asset and data-source registries and event ingestion.
 
     Data-source registration stores metadata only. Kudu does not connect to
     REST endpoints, read files, or ingest data. REST credential references are
@@ -19,6 +19,7 @@ tags:
   - name: Health
   - name: Assets
   - name: Data sources
+  - name: Events
 paths:
   /healthz:
     get:
@@ -252,6 +253,118 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/events:
+    get:
+      tags: [Events]
+      operationId: listEvents
+      summary: List stored events and filter by provenance
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: sourceId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: assetId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: sourceKey
+          in: query
+          description: Exact, case-insensitive registered source key.
+          schema:
+            $ref: "#/components/schemas/DataSourceKey"
+        - name: assetKey
+          in: query
+          description: Exact, case-insensitive registered asset key.
+          schema:
+            $ref: "#/components/schemas/AssetKey"
+        - name: eventType
+          in: query
+          schema:
+            type: string
+            maxLength: 120
+        - name: from
+          in: query
+          description: Inclusive lower bound for occurrence time.
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Inclusive upper bound for occurrence time.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Event metadata ordered by occurrence time descending; payloads are omitted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/EventListItem"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      tags: [Events]
+      operationId: ingestEvent
+      summary: Persist an industrial event
+      description: |
+        Occurrence timestamps must be RFC 3339 with an explicit timezone and are
+        stored as UTC instants. Unknown payload fields are preserved. A
+        deduplication key is unique within its source: an identical retry
+        returns the original event with duplicate=true; reusing the key with
+        different content returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventCreate"
+      responses:
+        "201":
+          description: New event persisted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestEventResponse"
+        "200":
+          description: Identical retry returned the existing event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestEventResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/events/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [Events]
+      operationId: getEvent
+      summary: Get an event and its full payload
+      responses:
+        "200":
+          description: Event, payload, and source provenance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   parameters:
     Id:
@@ -693,4 +806,131 @@ components:
         configuration:
           $ref: "#/components/schemas/DataSourceConfigurationInput"
         enabled:
+          type: boolean
+    JsonValue:
+      oneOf:
+        - type: [string, number, boolean, "null"]
+        - type: array
+          items:
+            $ref: "#/components/schemas/JsonValue"
+        - type: object
+          additionalProperties:
+            $ref: "#/components/schemas/JsonValue"
+    JsonObject:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/JsonValue"
+    EventSourceReference:
+      type: object
+      required: [id, sourceKey, displayName]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceKey:
+          $ref: "#/components/schemas/DataSourceKey"
+        displayName:
+          type: string
+    EventAssetReference:
+      type: object
+      required: [id, assetKey, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        assetKey:
+          $ref: "#/components/schemas/AssetKey"
+        name:
+          type: string
+    EventListItem:
+      type: object
+      required:
+        - id
+        - source
+        - asset
+        - sourceRecordId
+        - eventType
+        - occurredAt
+        - ingestedAt
+        - sourceTimestamp
+        - deduplicationKey
+      properties:
+        id:
+          type: string
+          format: uuid
+        source:
+          $ref: "#/components/schemas/EventSourceReference"
+        asset:
+          oneOf:
+            - $ref: "#/components/schemas/EventAssetReference"
+            - type: "null"
+        sourceRecordId:
+          type: [string, "null"]
+        eventType:
+          type: string
+          maxLength: 120
+        occurredAt:
+          type: string
+          format: date-time
+          description: Normalized UTC occurrence instant.
+        ingestedAt:
+          type: string
+          format: date-time
+        sourceTimestamp:
+          type: string
+          description: Original source timestamp text retained for provenance.
+        deduplicationKey:
+          type: [string, "null"]
+    EventDetail:
+      allOf:
+        - $ref: "#/components/schemas/EventListItem"
+        - type: object
+          required: [payload, provenance]
+          properties:
+            payload:
+              $ref: "#/components/schemas/JsonObject"
+            provenance:
+              $ref: "#/components/schemas/JsonObject"
+    EventCreate:
+      type: object
+      additionalProperties: false
+      required: [sourceId, eventType, occurredAt, payload]
+      properties:
+        sourceId:
+          type: string
+          format: uuid
+        assetId:
+          type: [string, "null"]
+          format: uuid
+        sourceRecordId:
+          type: [string, "null"]
+          maxLength: 256
+        eventType:
+          type: string
+          minLength: 1
+          maxLength: 120
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
+        occurredAt:
+          type: string
+          format: date-time
+          description: RFC 3339 timestamp with an explicit timezone.
+        sourceTimestamp:
+          type: [string, "null"]
+          maxLength: 256
+          description: Original timestamp text; defaults to occurredAt.
+        deduplicationKey:
+          type: [string, "null"]
+          maxLength: 256
+          description: Unique within the referenced data source when present.
+        payload:
+          $ref: "#/components/schemas/JsonObject"
+        provenance:
+          $ref: "#/components/schemas/JsonObject"
+    IngestEventResponse:
+      type: object
+      required: [event, duplicate]
+      properties:
+        event:
+          $ref: "#/components/schemas/EventDetail"
+        duplicate:
           type: boolean

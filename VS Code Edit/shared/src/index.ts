@@ -145,3 +145,65 @@ export interface Page<T> {
 }
 
 export type AssetStatusFilter = "active" | "archived" | "all";
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+export interface EventSourceReference {
+  id: string;
+  sourceKey: string;
+  displayName: string;
+}
+
+export interface EventAssetReference {
+  id: string;
+  assetKey: string;
+  name: string;
+}
+
+export interface EventListItem {
+  id: string;
+  source: EventSourceReference;
+  asset: EventAssetReference | null;
+  sourceRecordId: string | null;
+  eventType: string;
+  occurredAt: string;
+  ingestedAt: string;
+  sourceTimestamp: string;
+  deduplicationKey: string | null;
+}
+
+export interface EventDetail extends EventListItem {
+  payload: JsonObject;
+  provenance: JsonObject;
+}
+
+export interface IngestEventInput {
+  sourceId: string;
+  assetId?: string | null;
+  sourceRecordId?: string | null;
+  eventType: string;
+  occurredAt: string;
+  sourceTimestamp?: string | null;
+  deduplicationKey?: string | null;
+  payload: JsonObject;
+  provenance?: JsonObject;
+}
+
+export interface IngestEventResponse {
+  event: EventDetail;
+  duplicate: boolean;
+}
+
+export interface EventListFilters {
+  sourceId?: string;
+  assetId?: string;
+  sourceKey?: string;
+  assetKey?: string;
+  eventType?: string;
+  from?: string;
+  to?: string;
+}

@@ -87,8 +87,45 @@ Example:
 }
 ```
 
+### Events
+
+| Method | Route | Behavior |
+|---|---|---|
+| `POST` | `/api/v1/events` | Validate and persist an event with source provenance; first insert returns `201`, an identical deduplicated retry returns `200`. |
+| `GET` | `/api/v1/events` | List event metadata with stable pagination and optional filters. Payloads are omitted from list rows. |
+| `GET` | `/api/v1/events/{id}` | Get the full event, payload, and provenance. |
+
+Ingestion requires a registered `sourceId`, event type, RFC 3339 `occurredAt` with an explicit timezone, and a JSON-object `payload`. `assetId`, original source record ID, original source timestamp, source provenance object, and deduplication key are optional. Asset and source references are checked before insertion. The complete payload is stored without filtering unknown fields; payload and provenance together are limited to 512 KiB.
+
+`occurredAt` is stored as a PostgreSQL `timestamptz` and returned in UTC. The exact submitted timestamp is retained as `sourceTimestamp` unless a separate source timestamp is provided. This preserves original offsets or source-specific timestamp text. `ingestedAt` is assigned by PostgreSQL.
+
+Deduplication keys are unique per data source. Repeating the same key with identical event content returns the existing event with `duplicate: true`; reusing it with different content returns `409 DEDUPLICATION_CONFLICT`. Requests without a deduplication key are always inserted as new events. The key is scoped to the source so unrelated sources can use the same source-record key.
+
+List filters are `sourceId`, `assetId`, exact case-insensitive `sourceKey` and `assetKey`, exact `eventType`, and inclusive RFC 3339 `from`/`to` timestamps. Events are ordered by occurrence time descending, then ID descending. `pageSize` defaults to 25 and is limited to 100.
+
+Example:
+
+```json
+{
+  "sourceId": "9a07ab8c-2f6e-46e1-88e7-d8a754e9351f",
+  "assetId": "2edccf7c-68ef-4d15-bbbe-a18640a87231",
+  "sourceRecordId": "controller-event-019",
+  "eventType": "alarm.raised",
+  "occurredAt": "2026-10-27T16:15:30.123456+02:00",
+  "deduplicationKey": "controller-event-019",
+  "payload": {
+    "alarm": { "code": "E-19", "severity": 3 },
+    "vendorSpecificField": { "value": "preserved" }
+  },
+  "provenance": {
+    "controller": "press-02",
+    "signal": "high_pressure"
+  }
+}
+```
+
 ### Errors and security
 
-Errors use `{ "error": { "code": "...", "message": "...", "fields": {} } }`; `fields` is omitted when there are no field-specific errors. Duplicate keys return `409`; validation failures return `400`; missing records return `404`.
+Errors use `{ "error": { "code": "...", "message": "...", "fields": {} } }`; `fields` is omitted when there are no field-specific errors. Duplicate registry keys and conflicting event deduplication-key reuse return `409`; validation failures return `400`; missing records return `404`. An identical event retry returns the original record with `200`.
 
 Authentication and authorization are not implemented. All write routes are unauthenticated. The default server host is `127.0.0.1`, and the Compose app port is published on loopback only. Do not override these controls or expose the service to untrusted networks until authentication and authorization are added.

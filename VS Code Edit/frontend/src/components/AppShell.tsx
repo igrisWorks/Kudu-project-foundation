@@ -12,6 +12,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <Link href="/" aria-current={location === "/" ? "page" : undefined} data-testid="nav-home">Status</Link>
         <Link href="/assets" aria-current={location.startsWith("/assets") ? "page" : undefined} data-testid="nav-assets">Assets</Link>
         <Link href="/data-sources" aria-current={location.startsWith("/data-sources") ? "page" : undefined} data-testid="nav-data-sources">Data sources</Link>
+        <Link href="/events" aria-current={location.startsWith("/events") ? "page" : undefined} data-testid="nav-events">Events</Link>
       </nav>
       <div className="environment"><span className="environment-dot" /> LOCAL REGISTRY</div>
     </header>

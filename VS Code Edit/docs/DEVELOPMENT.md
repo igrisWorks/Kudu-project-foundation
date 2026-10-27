@@ -35,6 +35,15 @@ pnpm build
 
 The default test command runs validation and existing unit tests. To run database migration and registry API integration tests against a disposable/local PostgreSQL database, set `KUDU_TEST_DATABASE_URL` and run `pnpm test`. The integration suite creates uniquely named records and removes them after the test; do not point it at production.
 
+Event ingestion uses the same database integration-test connection. Focused checks can be run with:
+
+```sh
+cd backend
+KUDU_TEST_DATABASE_URL=postgresql://... node --import tsx --test src/events.integration.test.ts
+```
+
+This test applies pending migrations and removes its unique fixture events, assets, and source afterward. It covers persisted payload/provenance, timestamp normalization, invalid references, source-scoped retries, and deduplication-key conflicts. Use a disposable or local database, never production.
+
 ## Conventions
 
 - Keep runtime features in this directory, not in the Replit wrapper.

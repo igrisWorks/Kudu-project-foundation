@@ -6,6 +6,7 @@ import type { HealthResponse } from "@kudu/shared";
 import type { Database } from "./database.js";
 import { checkDatabase } from "./database.js";
 import { ApiFailure } from "./errors.js";
+import { registerEventRoutes } from "./events.js";
 import { registerRegistryRoutes } from "./registry.js";
 import type { Kysely } from "kysely";
 
@@ -115,6 +116,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   );
 
   registerRegistryRoutes(app, options.db);
+  registerEventRoutes(app, options.db);
 
   if (options.staticDirectory) {
     try {

@@ -9,7 +9,12 @@ import type {
   DataSourceRecord,
   DataSourceType,
   DataSourceUpdateInput,
+  EventDetail,
+  EventListFilters,
+  EventListItem,
   HealthResponse,
+  IngestEventInput,
+  IngestEventResponse,
   Page,
 } from "@kudu/shared";
 
@@ -134,6 +139,31 @@ export function updateDataSource(
 ): Promise<DataSourceRecord> {
   return request(`/api/v1/data-sources/${encodeURIComponent(id)}`, {
     method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function listEvents(
+  query: ListQuery & EventListFilters,
+): Promise<Page<EventListItem>> {
+  const extra: Record<string, string> = {};
+  if (query.sourceId) extra.sourceId = query.sourceId;
+  if (query.assetId) extra.assetId = query.assetId;
+  if (query.sourceKey) extra.sourceKey = query.sourceKey;
+  if (query.assetKey) extra.assetKey = query.assetKey;
+  if (query.eventType) extra.eventType = query.eventType;
+  if (query.from) extra.from = query.from;
+  if (query.to) extra.to = query.to;
+  return request(listPath("events", query, extra));
+}
+
+export function getEvent(id: string): Promise<EventDetail> {
+  return request(`/api/v1/events/${encodeURIComponent(id)}`);
+}
+
+export function ingestEvent(input: IngestEventInput): Promise<IngestEventResponse> {
+  return request("/api/v1/events", {
+    method: "POST",
     body: JSON.stringify(input),
   });
 }

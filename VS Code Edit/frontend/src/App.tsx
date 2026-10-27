@@ -3,6 +3,7 @@ import AppShell from "./components/AppShell";
 import HomePage from "./pages/HomePage";
 import { AssetDetailPage, AssetFormPage, AssetListPage } from "./pages/AssetsPage";
 import { DataSourceDetailPage, DataSourceFormPage, DataSourceListPage } from "./pages/DataSourcesPage";
+import { EventDetailPage, EventsListPage } from "./pages/EventsPage";
 
 function NotFoundPage() {
   return <main className="page-main"><section className="not-found">
@@ -27,6 +28,8 @@ export default function App() {
     <Route path="/data-sources/new"><DataSourceFormPage editing={false} /></Route>
     <Route path="/data-sources/:id/edit"><DataSourceFormPage editing /></Route>
     <Route path="/data-sources/:id"><DataSourceDetailPage /></Route>
+    <Route path="/events" component={EventsListPage} />
+    <Route path="/events/:id" component={EventDetailPage} />
     <Route><NotFoundPage /></Route>
   </Switch></AppShell>;
 }
