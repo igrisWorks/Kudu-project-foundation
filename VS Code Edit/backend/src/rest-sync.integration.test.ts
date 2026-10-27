@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -9,7 +9,9 @@ import { Kysely, PostgresDialect } from "kysely";
 import { Pool } from "pg";
 import { createApp } from "./app.js";
 import type { Database } from "./database.js";
+import { ApiFailure } from "./errors.js";
 import { runMigrations } from "./migration-runner.js";
+import { validateDataSourceCreate } from "./registry-validation.js";
 
 const databaseUrl = process.env.KUDU_TEST_DATABASE_URL;
 const migrationsDirectory = resolve(
@@ -47,6 +49,7 @@ async function createFixture(context: TestLifecycle) {
 
   context.after(async () => {
     if (sourceIds.length) {
+      await db.deleteFrom("data_source_event_mappings").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("events").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("data_sources").where("id", "in", sourceIds).execute();
     }
@@ -131,6 +134,48 @@ async function createFixture(context: TestLifecycle) {
 
   return { app, db, addAsset, addSource, activateMapping };
 }
+
+test("REST source configuration accepts bounded GET/JSON and rejects write methods", () => {
+  const valid = validateDataSourceCreate({
+    sourceKey: "rest-config-test",
+    displayName: "REST configuration test",
+    sourceType: "rest_api",
+    configuration: {
+      kind: "rest_api",
+      baseUrl: "https://api.example.test/v1",
+      endpointPath: "events",
+      method: "GET",
+      authMode: "bearer",
+      credentialRef: "env:KUDU_SOURCE_REST_TEST_TOKEN",
+      timeoutMs: 500,
+      maxResponseBytes: 1024,
+      maxRecords: 1,
+      responseFormat: "json",
+      recordsPath: "data.items",
+    },
+  });
+  assert.equal(valid.configuration.kind, "rest_api");
+  if (valid.configuration.kind === "rest_api") {
+    assert.equal(valid.configuration.authMode, "bearer");
+    assert.equal(valid.configuration.method, "GET");
+    assert.equal(valid.configuration.credentialRef, "env:KUDU_SOURCE_REST_TEST_TOKEN");
+  }
+
+  function assertFieldRejected(configuration: Record<string, unknown>, field: string) {
+    assert.throws(
+      () => validateDataSourceCreate({
+        sourceKey: "rest-config-test",
+        displayName: "REST configuration test",
+        sourceType: "rest_api",
+        configuration: { kind: "rest_api", baseUrl: "https://api.example.test", ...configuration },
+      }),
+      (cause: unknown) => cause instanceof ApiFailure && Boolean(cause.fields?.[`configuration.${field}`]),
+    );
+  }
+  assertFieldRejected({ method: "POST" }, "method");
+  assertFieldRejected({ authMode: "bearer", baseUrl: "http://api.example.test" }, "authMode");
+  assertFieldRejected({ maxRecords: 1001 }, "maxRecords");
+});
 
 test(
   "REST sync imports mapped events and deterministically counts duplicate records",
@@ -217,7 +262,7 @@ test(
     context.after(() => closeServer(server));
 
     const { app, addSource, activateMapping } = await createFixture(context);
-    for (const [path, expectedCode] of [["bad-json", "REST_INVALID_JSON"], ["http-error", "REST_HTTP_ERROR"]]) {
+    for (const [path, expectedCode] of [["bad-json", "REST_INVALID_JSON"], ["http-error", "REST_HTTP_ERROR"]] as const) {
       const sourceId = await addSource(port, path);
       await activateMapping(sourceId);
       const response = await app.inject({ method: "POST", url: `/api/v1/data-sources/${sourceId}/sync` });

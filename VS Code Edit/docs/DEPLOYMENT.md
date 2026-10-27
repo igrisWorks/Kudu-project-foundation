@@ -30,6 +30,14 @@ Place operator-controlled files under the host `imports/` directory. Register a 
 
 Imports are limited to 5 MiB and 1,000 records. The API accepts only a registered source ID, never a path, and will not follow a symlink outside the import root. Import counts and per-record errors are returned immediately; there is no scheduler or persisted run history. The endpoint inherits the API's unauthenticated access model and is safe to use only under the existing loopback/trusted-network restriction.
 
+## On-demand REST API sync
+
+Register an HTTPS base URL, relative endpoint path, GET method, JSON response path, bounded timeout/size/record limits, an active event mapping, and optionally `authMode: "bearer"` with an `env:KUDU_SOURCE_*` reference. Provision the referenced environment variable outside the registry; only bearer authentication is implemented, and bearer tokens require HTTPS. Registration, editing, listing, and viewing do not contact the remote service. Only an operator's **Sync now** action makes a request. Sync results are returned immediately and are not stored as run history.
+
+By default, the connector blocks loopback, private, link-local, multicast, reserved, and other special-use network destinations. DNS results are checked and pinned for the request; each redirect is revalidated and bearer credentials are not forwarded to another origin. To trust specific on-premises API hosts, set `KUDU_REST_TRUSTED_HOSTS` to a comma-separated list of exact hostnames/IP addresses, for example `plc-api.internal,10.20.30.40`. Exact allowlisted hosts may resolve to private IPv4 or IPv6 ULA addresses, but loopback, link-local, multicast, and reserved addresses remain blocked. Wildcards are not accepted. Keep this allowlist under trusted operator control.
+
+The sync endpoint is unauthenticated, as are the other API write routes. Keep the application bound to loopback and do not expose it to untrusted networks.
+
 ## Operations
 
 ```sh

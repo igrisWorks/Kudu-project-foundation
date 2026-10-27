@@ -274,12 +274,14 @@ async function requestJson(
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) throw new RestRequestError("REST_TIMEOUT", "The remote request timed out.", 504);
     const destination = await validateDestination(url, policy, remainingMs);
+    const requestTimeoutMs = deadline - Date.now();
+    if (requestTimeoutMs <= 0) throw new RestRequestError("REST_TIMEOUT", "The remote request timed out.", 504);
     const response = await requestOnce(
       url,
       destination,
       url.origin === credentialOrigin ? authorization : undefined,
       maxResponseBytes,
-      remainingMs,
+      requestTimeoutMs,
     );
     const status = response.statusCode;
     if ([301, 302, 303, 307, 308].includes(status)) {

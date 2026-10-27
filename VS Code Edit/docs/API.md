@@ -99,6 +99,40 @@ Example:
 }
 ```
 
+### REST API sync
+
+| Method | Route | Behavior |
+|---|---|---|
+| `POST` | `/api/v1/data-sources/{id}/sync` | Fetch and ingest records from one enabled REST source. The request has no body and accepts no URL or method override. |
+
+Sync requires an active event mapping. The configured endpoint is formed from the base URL and relative endpoint path, uses `GET` only, and parses the configured JSON array. Each object record is normalized by the same versioned mapping and submitted through normal event ingestion and source-scoped deduplication. The result reports `requestSucceeded`, `fetched`, `imported`, `duplicates`, `failed`, and up to 100 concise errors. Request or response failures return `requestSucceeded: false`; record-level ingestion failures increment `failed`. Runs are on demand and are not scheduled or stored as history.
+
+Example remote response and mapping:
+
+```json
+{
+  "data": {
+    "events": [
+      {
+        "id": "controller-019",
+        "kind": "alarm.raised",
+        "time": "2026-10-27T16:15:30.123456+02:00",
+        "machine_key": "press-02",
+        "measurements": { "pressure_kpa": 842.5 }
+      }
+    ]
+  }
+}
+```
+
+Use an active mapping such as `eventType: "kind"`, `occurredAt: "time"`, `sourceRecordId: "id"`, `assetKey: "machine_key"`, and `payload: { "pressureKpa": "measurements.pressure_kpa" }`. The original record and mapping version are retained in provenance, the source record ID is retained in the event, and original timestamp text is retained as `sourceTimestamp`. Without a mapped source-record ID, a stable hash of the JSON record is used as the deduplication key.
+
+### REST destination security
+
+Public IPv4/IPv6 destinations are allowed by default. Loopback, private, link-local, multicast, reserved, and other special-use addresses are blocked. DNS answers are checked and the connection is pinned to a validated address. Each redirect is checked again, redirects are bounded, HTTPS-to-HTTP downgrade is blocked, and bearer credentials are never forwarded to another origin.
+
+For trusted on-premises APIs, configure `KUDU_REST_TRUSTED_HOSTS` as a comma-separated list of exact hostnames or IP addresses, such as `plc-api.internal,10.20.30.40`. Only listed hosts may resolve to private IPv4 or IPv6 ULA addresses. Wildcards are not supported; loopback, link-local, multicast, and reserved addresses remain blocked. Configure this allowlist only on a trusted host. The Kudu API itself remains unauthenticated; keep it loopback-only and do not expose it to untrusted networks.
+
 ### CSV/JSON file import
 
 | Method | Route | Behavior |
@@ -142,7 +176,7 @@ Each valid record is sent through the normal event validation, reference checks,
 | `POST` | `/api/v1/data-sources/{id}/mappings/{version}/validate` | Validate the definition and save any errors. |
 | `POST` | `/api/v1/data-sources/{id}/mappings/{version}/activate` | Activate a validated draft and retire the previously active version. |
 
-Mappings are available only for registered CSV and JSON file sources. A definition selects source field paths for required event type and occurrence timestamp, optional source-record ID and asset key, and optional payload output fields. Nested JSON paths use dot notation; array indexing and value transformations are not supported.
+Mappings are available for registered CSV, JSON, and REST API sources. A definition selects source field paths for required event type and occurrence timestamp, optional source-record ID and asset key, and optional payload output fields. Nested JSON paths use dot notation; array indexing and value transformations are not supported.
 
 ```json
 {
@@ -158,9 +192,9 @@ Mappings are available only for registered CSV and JSON file sources. A definiti
 }
 ```
 
-The `assetKey` rule resolves only an exact active `asset_key` already in the asset registry; names, IP addresses, and fuzzy matches are never used. Each import with an active mapping stores the mapping version and the original source record in event provenance. The occurrence time is normalized to UTC by event ingestion while its original text is retained as `sourceTimestamp`. Unmapped fields remain in payload; mapped payload outputs are added without silently overwriting different existing values. Missing required mapped fields or unregistered asset keys fail that record. Validation checks the mapping definition; record-specific missing values are reported during import.
+The `assetKey` rule resolves only an exact active `asset_key` already in the asset registry; names, IP addresses, and fuzzy matches are never used. Each mapped import or REST sync stores the mapping version and original source record in event provenance. The occurrence time is normalized to UTC by event ingestion while its original text is retained as `sourceTimestamp`. Unmapped fields remain in payload; mapped payload outputs are added without silently overwriting different existing values. Missing required mapped fields or unregistered asset keys fail that record. Validation checks the mapping definition; record-specific missing values are reported during import or sync.
 
-Activation changes interpretation only for imports started afterward. Existing events are not rewritten. Mapping version is retained in provenance, and source-scoped deduplication remains in effect: reusing a source-record ID with changed normalized content is a conflict, not an update. If no mapping is active, the existing CSV/JSON import behavior is unchanged. Mapping writes, like other API writes, are unauthenticated; keep the application loopback-only until access controls are implemented.
+Activation changes interpretation only for subsequent imports and REST syncs. Existing events are not rewritten. Mapping version is retained in provenance, and source-scoped deduplication remains in effect: reusing a source-record ID with changed normalized content is a conflict, not an update. If no mapping is active, existing CSV/JSON import behavior is unchanged; REST sync requires an active mapping. Mapping writes, like other API writes, are unauthenticated; keep the application loopback-only until access controls are implemented.
 
 ### Events
 

@@ -46,7 +46,7 @@ function DataSourceListPage() {
   const maxPage = Math.max(1, Math.ceil((result?.total ?? 0) / (result?.pageSize ?? PAGE_SIZE)));
   return <main className="page-main">
     <PageIntro eyebrow="REGISTRY / 02" title="Data sources" description="Describe where operational information lives. Registration and enablement do not connect, ingest, or generate outbound traffic." action={<Link className="button button-primary" href="/data-sources/new" data-testid="button-create-data-source"><span aria-hidden="true">＋</span> Add data source</Link>} />
-    <div className="notice" data-testid="notice-connector-status"><strong>Connector status: not implemented.</strong> Enabling a record is metadata only; it does not start a connection or ingestion.</div>
+    <div className="notice" data-testid="notice-connector-status"><strong>Source actions are on demand.</strong> REST sync and local CSV/JSON imports run only when requested. Registration and enablement never start polling or ingestion.</div>
     <div className="toolbar">
       <div className="field field-search"><label htmlFor="source-search">Search registry</label><input id="source-search" data-testid="input-data-source-search" value={search} onChange={event => { setSearch(event.target.value); setPage(1); }} placeholder="Search key or display name…" /></div>
       <div className="field field-filter"><label htmlFor="source-type-filter">Source type</label><select id="source-type-filter" data-testid="filter-data-source-type" value={sourceType} onChange={event => { setSourceType(event.target.value); setPage(1); }}><option value="">All types</option>{DATA_SOURCE_TYPES.map(type => <option value={type} key={type}>{sourceLabels[type]}</option>)}</select></div>
@@ -59,7 +59,8 @@ function DataSourceListPage() {
         <tbody>{result.items.map(source => <tr key={source.id} data-testid={`row-data-source-${source.id}`}>
           <td><Link className="record-link mono" href={`/data-sources/${encodeURIComponent(source.id)}`} data-testid={`link-data-source-${source.id}`}>{source.sourceKey}</Link><br /><Link className="record-link" href={`/data-sources/${encodeURIComponent(source.id)}`} data-testid={`link-data-source-name-${source.id}`}>{source.displayName}</Link></td>
           <td>{sourceLabels[source.sourceType]}</td><td><span className={`status-pill ${source.enabled ? "good" : ""}`}>{source.enabled ? "ENABLED" : "DISABLED"}</span></td>
-          <td><ConnectorBadge status={source.connectionStatus} /></td><td className="time-label">{formatDate(source.lastSuccessfulSyncAt)}</td>
+          <td>{source.sourceType === "rest_api" ? <span className="status-pill good">ON-DEMAND</span> : <ConnectorBadge status={source.connectionStatus} />}</td>
+          <td className="time-label">{source.sourceType === "rest_api" ? "Not tracked" : formatDate(source.lastSuccessfulSyncAt)}</td>
         </tr>)}</tbody>
       </table></div>
       <ListPagination page={page} maxPage={maxPage} total={result.total} onChange={setPage} testId="data-sources" />
@@ -468,7 +469,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
     <div className="detail-heading"><Link href={editing ? `/data-sources/${encodeURIComponent(id)}` : "/data-sources"} className="back-link" data-testid="link-cancel-data-source">← {editing ? "Data source record" : "All data sources"}</Link>
       <PageIntro eyebrow={editing ? "REGISTRY / SOURCE / EDIT" : "REGISTRY / SOURCE / NEW"} title={editing ? "Edit data source" : "Register data source"} description="Record configuration metadata. This workflow does not establish a connection or start ingestion." />
     </div>
-    <div className="notice"><strong>Connector status: not implemented.</strong> Enabled only records intended state; it does not initiate outbound traffic.</div>
+    <div className="notice"><strong>Actions are on demand.</strong> Saving or enabling a REST source does not contact it; only Sync now sends a GET request.</div>
     {error && <div className="notice error" role="alert" data-testid="error-data-source-submit">{error}</div>}
     {validation && <div className="notice error" role="status" data-testid="validation-data-source">{validation}</div>}
     <section className="form-layout"><form className="form-panel" onSubmit={submit} noValidate>

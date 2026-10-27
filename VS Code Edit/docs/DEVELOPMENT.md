@@ -62,6 +62,15 @@ KUDU_TEST_DATABASE_URL=postgresql://... node --import tsx --test src/event-mappi
 
 The focused mapping tests cover CSV and JSON field selection, activation/version history, normalized records, preserved payload/provenance, validation failures, and unchanged imports when no mapping is active. The additive `0004_data_source_event_mappings.sql` migration is applied by the existing migration runner.
 
+REST connector checks use a local mock HTTP server and the same disposable/local PostgreSQL connection:
+
+```sh
+cd backend
+KUDU_TEST_DATABASE_URL=postgresql://... node --import tsx --test src/rest-sync.integration.test.ts
+```
+
+They cover REST configuration validation, persisted mapped records and duplicates, malformed JSON and remote HTTP failures, and blocked destinations and redirects. No live API is contacted.
+
 ## Conventions
 
 - Keep runtime features in this directory, not in the Replit wrapper.

@@ -4,14 +4,16 @@ info:
   version: 0.1.0
   summary: Asset and data-source registry API
   description: |
-    Versioned API for Kudu's registries, event ingestion, CSV/JSON imports, and source event mappings.
+    Versioned API for Kudu's registries, event ingestion, file imports, REST sync, and source event mappings.
 
-    Data-source registration stores metadata only. Kudu does not connect to
-    REST endpoints, read files, or ingest data. REST credential references are
-    accepted only as environment-variable names and are redacted from responses.
+    Data-source registration stores metadata only. Kudu connects to a REST
+    endpoint only after an operator explicitly triggers a sync. REST sync uses
+    bounded GET/JSON requests, active event mappings, and SSRF destination
+    protections. Credential references are environment-variable names and are
+    redacted from responses.
 
     This API does not yet implement authentication or authorization. Write
-    endpoints must not be exposed to untrusted networks.
+    and sync endpoints must not be exposed to untrusted networks.
 servers:
   - url: /
 security: []
@@ -283,13 +285,39 @@ paths:
           $ref: "#/components/responses/Conflict"
         "413":
           description: File size or record-count limit exceeded.
+  /api/v1/data-sources/{id}/sync:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      tags: [Data sources]
+      operationId: syncRestDataSource
+      summary: Sync an enabled REST API source
+      description: |
+        Performs one explicit, read-only GET. Requires an active event mapping.
+        The bounded JSON response is normalized and ingested through the
+        existing event pipeline. DNS results and every redirect destination
+        are checked against SSRF rules. Request failures are returned as
+        requestSucceeded=false with sanitized errors; no run history is stored.
+      responses:
+        "200":
+          description: Sync counts and sanitized request or record errors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestSyncResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/data-sources/{id}/mappings:
     parameters:
       - $ref: "#/components/parameters/Id"
     get:
       tags: [Data sources]
       operationId: listDataSourceEventMappings
-      summary: Inspect mapping versions for a file source
+      summary: Inspect mapping versions for a supported source
       responses:
         "200":
           description: Mapping versions, newest first.
@@ -373,7 +401,7 @@ paths:
       tags: [Data sources]
       operationId: validateDataSourceEventMapping
       summary: Validate a mapping draft
-      description: Validates the definition structure and source-field path syntax; individual record values are checked during import.
+      description: Validates the definition structure and source-field path syntax; individual record values are checked during file import or REST sync.
       responses:
         "200":
           description: Validation result with errors, if any.
@@ -812,10 +840,46 @@ components:
               type: string
               format: uri
               description: HTTP(S) URL without credentials, query parameters, or fragments.
+            endpointPath:
+              type: string
+              minLength: 1
+              maxLength: 512
+              description: Relative path appended to the base URL path.
+            method:
+              type: string
+              enum: [GET]
+              default: GET
+            authMode:
+              type: string
+              enum: [none, bearer]
+              default: none
             credentialRef:
               type: [string, "null"]
               pattern: "^env:KUDU_SOURCE_[A-Z0-9_]{1,80}$"
-              description: Environment-variable name only, never the credential value.
+              description: Environment-variable reference only. Used for Authorization: Bearer when authMode is bearer.
+            timeoutMs:
+              type: integer
+              minimum: 500
+              maximum: 30000
+              default: 10000
+            maxResponseBytes:
+              type: integer
+              minimum: 1024
+              maximum: 5242880
+              default: 1048576
+            maxRecords:
+              type: integer
+              minimum: 1
+              maximum: 1000
+              default: 500
+            responseFormat:
+              type: string
+              enum: [json]
+              default: json
+            recordsPath:
+              type: string
+              maxLength: 256
+              description: Dot path to the records array; blank means a top-level array.
         - type: object
           additionalProperties: false
           required: [kind, relativePath]
@@ -857,6 +921,25 @@ components:
             credentialConfigured:
               type: boolean
               description: Only indicates whether a reference exists; the reference and secret are never returned.
+            endpointPath:
+              type: string
+            method:
+              type: string
+              enum: [GET]
+            authMode:
+              type: string
+              enum: [none, bearer]
+            timeoutMs:
+              type: integer
+            maxResponseBytes:
+              type: integer
+            maxRecords:
+              type: integer
+            responseFormat:
+              type: string
+              enum: [json]
+            recordsPath:
+              type: string
         - type: object
           required: [kind, relativePath]
           properties:
@@ -1102,6 +1185,50 @@ components:
           type: integer
           minimum: 1
           description: CSV physical start line or one-based JSON array position.
+        code:
+          type: string
+        message:
+          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+    RestSyncResult:
+      type: object
+      required: [sourceId, requestSucceeded, fetched, imported, duplicates, failed, errors, errorsTruncated]
+      properties:
+        sourceId:
+          type: string
+          format: uuid
+        requestSucceeded:
+          type: boolean
+          description: False when the remote request or response could not be used.
+        fetched:
+          type: integer
+          minimum: 0
+        imported:
+          type: integer
+          minimum: 0
+        duplicates:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/RestSyncRecordError"
+        errorsTruncated:
+          type: boolean
+    RestSyncRecordError:
+      type: object
+      required: [record, code, message]
+      properties:
+        record:
+          type: integer
+          minimum: 0
+          description: Zero denotes a request-level error.
         code:
           type: string
         message:
