@@ -2,7 +2,12 @@
 
 const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain, session, shell } = require("electron");
-const { isSameOrigin, parseServerUrl, validatedExternalUrl } = require("./connection-policy.cjs");
+const {
+  isSameOrigin,
+  isSandboxDisabledByArgs,
+  parseServerUrl,
+  validatedExternalUrl,
+} = require("./connection-policy.cjs");
 
 const REMOTE_CSP = [
   "default-src 'self'",
@@ -209,7 +214,18 @@ function registerConnectionIpc() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (isSandboxDisabledByArgs(process.argv)) {
+    await dialog.showMessageBox({
+      type: "error",
+      title: "KuduNS sandbox support is required",
+      message: "KuduNS cannot start with Electron's sandbox disabled.",
+      detail: "Enable unprivileged user namespaces on this Linux host. The desktop will not bypass the sandbox requirement.",
+    });
+    app.quit();
+    return;
+  }
+
   registerConnectionIpc();
   connectionWindow = createConnectionWindow();
   app.on("activate", () => {

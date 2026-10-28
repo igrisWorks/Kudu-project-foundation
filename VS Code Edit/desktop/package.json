@@ -12,6 +12,7 @@
   "main": "main.cjs",
   "scripts": {
     "dev": "electron .",
+    "check:appimage": "bash check-appimage-runtime.sh ../release/desktop/KuduNS-0.1.0.AppImage",
     "package:deb": "electron-builder --config electron-builder.json --linux deb --x64",
     "package:appimage": "electron-builder --config electron-builder.json --linux AppImage --x64",
     "package:linux": "electron-builder --config electron-builder.json --linux deb AppImage --x64"

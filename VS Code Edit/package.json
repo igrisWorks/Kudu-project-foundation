@@ -19,6 +19,7 @@
     "desktop:build:renderer": "pnpm --filter @kudu/frontend run build:desktop",
     "desktop:dev": "pnpm run desktop:build:renderer && pnpm --dir desktop run dev",
     "desktop:test:policy": "node --test desktop/connection-policy.test.cjs",
+    "desktop:check:runtime": "pnpm --dir desktop run check:appimage",
     "desktop:package:deb": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:deb",
     "desktop:package:appimage": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:appimage",
     "desktop:package:linux": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:linux"

@@ -47,4 +47,13 @@ function validatedExternalUrl(value) {
   }
 }
 
-module.exports = { isSameOrigin, parseServerUrl, validatedExternalUrl };
+function isSandboxDisabledByArgs(args) {
+  return Array.isArray(args) && args.includes("--no-sandbox");
+}
+
+module.exports = {
+  isSameOrigin,
+  isSandboxDisabledByArgs,
+  parseServerUrl,
+  validatedExternalUrl,
+};

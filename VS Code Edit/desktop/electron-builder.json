@@ -26,6 +26,7 @@
   ],
   "linux": {
     "category": "Utility",
+    "executableArgs": [],
     "syncDesktopName": true,
     "target": [
       { "target": "deb", "arch": ["x64"] },

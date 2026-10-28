@@ -2,7 +2,12 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { isSameOrigin, parseServerUrl, validatedExternalUrl } = require("./connection-policy.cjs");
+const {
+  isSameOrigin,
+  isSandboxDisabledByArgs,
+  parseServerUrl,
+  validatedExternalUrl,
+} = require("./connection-policy.cjs");
 
 test("normalizes a secure KuduNS base URL", () => {
   assert.equal(parseServerUrl("  https://kudu.example.local/  ").origin, "https://kudu.example.local");
@@ -37,4 +42,9 @@ test("external links are limited to credential-free HTTPS destinations", () => {
   assert.equal(validatedExternalUrl("http://docs.example.com/guide"), null);
   assert.equal(validatedExternalUrl("javascript:alert(1)"), null);
   assert.equal(validatedExternalUrl("https://user:pass@docs.example.com"), null);
+});
+
+test("detects an explicitly disabled Electron sandbox", () => {
+  assert.equal(isSandboxDisabledByArgs(["kuduns-desktop", "--no-sandbox"]), true);
+  assert.equal(isSandboxDisabledByArgs(["kuduns-desktop"]), false);
 });
