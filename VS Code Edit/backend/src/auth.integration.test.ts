@@ -56,6 +56,14 @@ test("health stays public while API reads and writes require a valid session and
   });
   assert.equal(unauthenticatedRead.statusCode, 401);
   assert.equal(unauthenticatedWrite.statusCode, 401);
+  for (const url of [
+    "/api/v1/assets?status=all&assetType=plc",
+    "/api/v1/events/00000000-0000-4000-8000-000000000000",
+    "/api/v1/data-sources/00000000-0000-4000-8000-000000000000",
+  ]) {
+    const response = await app.inject({ method: "GET", url });
+    assert.equal(response.statusCode, 401, `Expected ${url} to require authentication.`);
+  }
 
   const invalidLogin = await app.inject({
     method: "POST",

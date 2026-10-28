@@ -122,11 +122,26 @@ test(
     });
     assert.ok(Number.isFinite(Date.parse(created.event.ingestedAt)));
 
+    const unlinkedResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/events",
+      payload: {
+        ...validEvent(sourceId, assetId, `${prefix}-unlinked`),
+        assetId: undefined,
+        sourceRecordId: "controller-event-unlinked",
+      },
+    });
+    assert.equal(unlinkedResponse.statusCode, 201);
+    assert.equal(unlinkedResponse.json().event.asset, null);
+
     const detail = await app.inject({
       method: "GET",
       url: `/api/v1/events/${created.event.id}`,
     });
     assert.equal(detail.statusCode, 200);
+    assert.equal(detail.json().id, created.event.id);
+    assert.equal(detail.json().source.id, sourceId);
+    assert.equal(detail.json().asset.id, assetId);
     assert.deepEqual(detail.json().payload, created.event.payload);
 
     const list = await app.inject({
@@ -139,6 +154,24 @@ test(
     assert.equal(list.json().total, 1);
     assert.equal(list.json().items[0].id, created.event.id);
     assert.equal("payload" in list.json().items[0], false);
+
+    const unfilteredList = await app.inject({
+      method: "GET",
+      url: `/api/v1/events?sourceId=${sourceId}`,
+    });
+    assert.equal(unfilteredList.statusCode, 200);
+    assert.equal(unfilteredList.json().total, 2);
+    assert.deepEqual(
+      new Set(unfilteredList.json().items.map((item: { id: string }) => item.id)),
+      new Set([created.event.id, unlinkedResponse.json().event.id]),
+    );
+
+    const missingDetail = await app.inject({
+      method: "GET",
+      url: "/api/v1/events/00000000-0000-4000-8000-000000000000",
+    });
+    assert.equal(missingDetail.statusCode, 404);
+    assert.equal(missingDetail.json().error.code, "NOT_FOUND");
   },
 );
 

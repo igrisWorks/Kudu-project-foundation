@@ -53,6 +53,10 @@ test(
         .execute();
       await db
         .deleteFrom("assets")
+        .where("asset_key", "=", `${prefix}-archived-plc`)
+        .execute();
+      await db
+        .deleteFrom("assets")
         .where("asset_key", "=", `${prefix}-parent`)
         .execute();
       await db
@@ -115,6 +119,25 @@ test(
     assert.equal(childResponse.statusCode, 201);
     const child = childResponse.json();
 
+    const archivedAssetResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/assets",
+      payload: {
+        assetKey: `${prefix}-archived-plc`,
+        name: "Integration test archived PLC",
+        assetType: "plc",
+      },
+    });
+    assert.equal(archivedAssetResponse.statusCode, 201);
+    const archivedAsset = archivedAssetResponse.json();
+    const archiveResponse = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/assets/${archivedAsset.id}`,
+      payload: { archived: true },
+    });
+    assert.equal(archiveResponse.statusCode, 200);
+    assert.equal(archiveResponse.json().status, "archived");
+
     const cycleResponse = await app.inject({
       method: "PATCH",
       url: `/api/v1/assets/${parent.id}`,
@@ -131,19 +154,55 @@ test(
       method: "GET",
       url: `/api/v1/assets?search=${prefix}&status=all&page=2&pageSize=1`,
     });
+    const thirdPage = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets?search=${prefix}&status=all&page=3&pageSize=1`,
+    });
     assert.equal(firstPage.statusCode, 200);
-    assert.equal(firstPage.json().total, 2);
+    assert.equal(firstPage.json().total, 3);
     assert.equal(firstPage.json().items.length, 1);
     assert.equal(secondPage.json().items.length, 1);
+    assert.equal(thirdPage.json().items.length, 1);
     assert.notEqual(firstPage.json().items[0].id, secondPage.json().items[0].id);
 
-    const plcAssetsResponse = await app.inject({
+    const activePlcResponse = await app.inject({
       method: "GET",
-      url: `/api/v1/assets?search=${prefix}&status=all&assetType=plc`,
+      url: `/api/v1/assets?search=${prefix}&status=active&assetType=plc`,
     });
-    assert.equal(plcAssetsResponse.statusCode, 200);
-    assert.equal(plcAssetsResponse.json().total, 1);
-    assert.equal(plcAssetsResponse.json().items[0].id, child.id);
+    assert.equal(activePlcResponse.statusCode, 200);
+    assert.equal(activePlcResponse.json().total, 1);
+    assert.equal(activePlcResponse.json().items[0].id, child.id);
+
+    const archivedPlcResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets?search=${prefix}&status=archived&assetType=plc`,
+    });
+    assert.equal(archivedPlcResponse.statusCode, 200);
+    assert.equal(archivedPlcResponse.json().total, 1);
+    assert.equal(archivedPlcResponse.json().items[0].id, archivedAsset.id);
+
+    const combinedPageOne = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets?search=${prefix}&status=all&assetType=plc&page=1&pageSize=1`,
+    });
+    const combinedPageTwo = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets?search=${prefix}&status=all&assetType=plc&page=2&pageSize=1`,
+    });
+    assert.equal(combinedPageOne.json().total, 2);
+    assert.equal(combinedPageTwo.json().total, 2);
+    assert.deepEqual(
+      new Set([combinedPageOne.json().items[0].id, combinedPageTwo.json().items[0].id]),
+      new Set([child.id, archivedAsset.id]),
+    );
+
+    const emptyAssetsResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets?search=${prefix}-not-found&status=all`,
+    });
+    assert.equal(emptyAssetsResponse.statusCode, 200);
+    assert.equal(emptyAssetsResponse.json().total, 0);
+    assert.deepEqual(emptyAssetsResponse.json().items, []);
 
     const invalidAssetTypeResponse = await app.inject({
       method: "GET",
@@ -152,11 +211,33 @@ test(
     assert.equal(invalidAssetTypeResponse.statusCode, 400);
     assert.equal(invalidAssetTypeResponse.json().error.code, "INVALID_QUERY");
 
+    const invalidStatusResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets?search=${prefix}&status=unknown`,
+    });
+    assert.equal(invalidStatusResponse.statusCode, 400);
+    assert.equal(invalidStatusResponse.json().error.code, "INVALID_QUERY");
+
     const detailResponse = await app.inject({
       method: "GET",
       url: `/api/v1/assets/${parent.id}`,
     });
-    assert.equal(detailResponse.json().children[0].id, child.id);
+    assert.deepEqual(detailResponse.json().children.map((item: { id: string }) => item.id), [child.id]);
+
+    const archivedDetailResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/assets/${archivedAsset.id}`,
+    });
+    assert.equal(archivedDetailResponse.statusCode, 200);
+    assert.equal(archivedDetailResponse.json().status, "archived");
+    assert.ok(archivedDetailResponse.json().archivedAt);
+
+    const missingAssetResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/assets/00000000-0000-4000-8000-000000000000",
+    });
+    assert.equal(missingAssetResponse.statusCode, 404);
+    assert.equal(missingAssetResponse.json().error.code, "NOT_FOUND");
 
     const sourceResponse = await app.inject({
       method: "POST",
@@ -182,6 +263,20 @@ test(
       JSON.stringify(source).includes("KUDU_SOURCE_INTEGRATION_TEST_TOKEN"),
       false,
     );
+
+    const sourceDetailResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/data-sources/${source.id}`,
+    });
+    assert.equal(sourceDetailResponse.statusCode, 200);
+    assert.equal(sourceDetailResponse.json().id, source.id);
+
+    const missingSourceResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/data-sources/00000000-0000-4000-8000-000000000000",
+    });
+    assert.equal(missingSourceResponse.statusCode, 404);
+    assert.equal(missingSourceResponse.json().error.code, "NOT_FOUND");
 
     const disabledSourceResponse = await app.inject({
       method: "PATCH",

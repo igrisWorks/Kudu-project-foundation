@@ -125,6 +125,7 @@ export default function NamespacePage() {
 
   const assetMaxPage = Math.max(1, Math.ceil((assets?.total ?? 0) / (assets?.pageSize ?? ASSET_PAGE_SIZE)));
   const eventMaxPage = Math.max(1, Math.ceil((events?.total ?? 0) / (events?.pageSize ?? EVENT_PAGE_SIZE)));
+  const hasAssetFilters = Boolean(search.trim() || assetType || status !== "active");
 
   return <main className="page-main namespace-page">
     <PageIntro
@@ -179,7 +180,7 @@ export default function NamespacePage() {
             </table>
           </div>
           <ListPagination page={assetPage} maxPage={assetMaxPage} total={assets.total} onChange={setAssetPage} testId="namespace-assets" />
-        </> : <EmptyState title={search || assetType ? "No matching assets" : "No assets registered"} description={search || assetType ? "Adjust the search or filters. Results are filtered by the registry API." : "Registered assets will appear here. No sample records are shown."} />}
+        </> : <EmptyState title={hasAssetFilters ? "No matching assets" : "No assets registered"} description={hasAssetFilters ? "Adjust the search or filters. Results are filtered by the registry API." : "Registered assets will appear here. No sample records are shown."} />}
       </section>
 
       <section className="namespace-inspector" aria-label="Selected asset details and linked events">
