@@ -3,8 +3,8 @@ name: AppImage sandbox defaults
 description: Electron Builder AppImage launchers can alter Chromium sandbox behavior.
 ---
 
-**Rule:** Do not assume Electron window-level sandbox settings protect a Linux AppImage. Inspect the generated desktop entry and AppRun behavior, keep launcher arguments from explicitly disabling the sandbox, and refuse startup when sandbox prerequisites are absent.
+**Rule:** Do not rely on Electron Builder's default AppRun sandbox fallback. Keep the generated launcher fail-closed: reject root and `--no-sandbox`, and exit when unprivileged user namespaces are unavailable.
 
-**Why:** The AppImage launcher can add `--no-sandbox` as a fallback when unprivileged user namespaces are unavailable; that process-wide flag overrides the intended renderer security boundary.
+**Why:** Electron Builder's upstream AppRun template adds `--no-sandbox` when its user-namespace probe fails. A main-process guard prevents windows from opening, but patching the launcher avoids passing that flag at all.
 
-**How to apply:** After changing the Electron Builder version or AppImage target, inspect the extracted AppImage metadata and test its fail-closed path before treating the package as runtime-ready.
+**How to apply:** Keep the version-pinned builder patch and prerequisite-check assertion in sync. After changing the builder version or AppImage target, inspect extracted AppRun and test root, explicit-flag, and missing-namespace refusals.

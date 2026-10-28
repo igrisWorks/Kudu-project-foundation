@@ -30,12 +30,28 @@ fi
 
 app_dir="$temporary_dir/squashfs-root"
 app_binary="$app_dir/kuduns-desktop"
+app_run="$app_dir/AppRun"
 desktop_entry="$app_dir/KuduNS.desktop"
 failures=0
 
 if [[ ! -x "$app_binary" ]]; then
   printf 'Packaged KuduNS executable was not found.\n' >&2
   exit 1
+fi
+
+if [[ ! -x "$app_run" ]]; then
+  printf 'Packaged AppRun launcher was not found or is not executable.\n' >&2
+  failures=1
+elif grep -Fq 'NO_SANDBOX' "$app_run"; then
+  printf 'AppRun contains a fallback that can inject --no-sandbox.\n' >&2
+  failures=1
+elif ! grep -Fq 'KuduNS must be run as an unprivileged desktop user.' "$app_run" \
+  || ! grep -Fq 'KuduNS refuses to start with --no-sandbox.' "$app_run" \
+  || ! grep -Fq 'KuduNS requires unprivileged user namespaces;' "$app_run"; then
+  printf 'AppRun is missing one or more required fail-closed sandbox checks.\n' >&2
+  failures=1
+else
+  printf 'AppRun rejects root/--no-sandbox and never injects a sandbox-disabling flag.\n'
 fi
 
 missing_libraries=""

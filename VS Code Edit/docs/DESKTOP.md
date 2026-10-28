@@ -32,7 +32,7 @@ pnpm --dir desktop install --frozen-lockfile
 pnpm desktop:dev
 ```
 
-Electron and Electron Builder are pinned in the isolated `desktop/` package and its lockfile so the existing web/Docker install is unchanged. The command builds a separate renderer into `frontend/dist-desktop`; the normal web build remains in `frontend/dist`. The desktop build uses the same React/Vite frontend and the existing local brand assets.
+Electron and Electron Builder are pinned in the isolated `desktop/` package and its lockfile so the existing web/Docker install is unchanged. The pinned Electron Builder patch makes the generated AppRun fail closed when sandbox prerequisites are missing; it does not inject `--no-sandbox`. The command builds a separate renderer into `frontend/dist-desktop`; the normal web build remains in `frontend/dist`. The desktop build uses the same React/Vite frontend and the existing local brand assets.
 
 ## Server connection
 
@@ -69,7 +69,7 @@ pnpm desktop:check:runtime
 bash desktop/check-appimage-runtime.sh /path/to/KuduNS-0.1.0.AppImage
 ```
 
-It extracts the AppImage into a temporary directory, checks packaged ELF dependencies with `ldd`, checks for FUSE 2, tests unprivileged user namespaces, checks for a non-root user and display session, and rejects a desktop entry that explicitly adds `--no-sandbox`. It makes no network calls and installs no packages. A pass only means these prerequisites appear present; it does not launch the UI or verify a server connection.
+It extracts the AppImage into a temporary directory, verifies that AppRun rejects root and explicit `--no-sandbox` requests without injecting the flag, checks packaged ELF dependencies with `ldd`, checks for FUSE 2, tests unprivileged user namespaces, and checks for a display session. It makes no network calls and installs no packages. A pass only means these prerequisites appear present; it does not launch the UI or verify a server connection.
 
 On a compatible desktop session:
 
@@ -80,7 +80,7 @@ On a compatible desktop session:
 5. After connecting, attempt a cross-origin navigation and an external HTTPS link. Cross-origin navigation must remain blocked; the external link may open only in the system browser.
 6. Review application and system logs and configuration locations to confirm no password or session credential was written.
 
-Electron Builder's AppRun may add `--no-sandbox` when `unshare -Ur true` fails. The desktop entry no longer requests that flag explicitly, and the main process refuses to open any window if the flag is present. Do not work around this by launching with `--no-sandbox`; enable user namespaces only if permitted by the host's security policy.
+The generated AppRun refuses root execution, explicit `--no-sandbox` arguments, and hosts where `unshare -Ur true` fails. It never forwards or injects `--no-sandbox`; the Electron main-process guard remains defense in depth. Do not work around these checks; enable user namespaces only if permitted by the host's security policy.
 
 For offline transfer, create a checksum on the build machine with `sha256sum release/desktop/KuduNS-0.1.0.AppImage > release/desktop/KuduNS-0.1.0.AppImage.sha256`. Transfer the AppImage, checksum, and runtime prerequisite list through approved media. On the destination, run `sha256sum -c KuduNS-0.1.0.AppImage.sha256`. Stage the listed OS packages and their transitive dependencies from the matching signed Ubuntu/Debian repository or an approved local package mirror; the AppImage does not include these host libraries.
 
@@ -88,7 +88,7 @@ Troubleshooting:
 
 - `dlopen(): error loading libfuse.so.2`: install `libfuse2` from the host distribution repository.
 - `ldd` reports `not found`: install the corresponding OS package from the list above, then rerun the prerequisite checker.
-- The desktop reports sandbox support is required: check `unshare -Ur true` as the normal desktop user. The app intentionally exits rather than disable the sandbox.
+- The launcher reports sandbox support is required: check `unshare -Ur true` as the normal desktop user. The launcher intentionally exits rather than disable the sandbox.
 - A blank or unavailable server screen: verify the server base URL, trusted TLS certificate, and that `GET /healthz` returns `{"status":"ok"}` from that host.
 
 ## Security and limitations
