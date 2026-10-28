@@ -1,1 +1,4 @@
 packages: []
+
+patchedDependencies:
+  app-builder-lib@26.18.0: patches/app-builder-lib@26.18.0.patch

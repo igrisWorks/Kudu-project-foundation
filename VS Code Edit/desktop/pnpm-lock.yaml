@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  app-builder-lib@26.18.0:
+    hash: bd6425fc094a0c15dc8755829e3c8377c38f65194918996d5d7e8ef191c9da5c
+    path: patches/app-builder-lib@26.18.0.patch
+
 importers:
 
   .:
@@ -1235,7 +1240,7 @@ snapshots:
     dependencies:
       color-convert: 2.0.1
 
-  app-builder-lib@26.18.0(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0):
+  app-builder-lib@26.18.0(patch_hash=bd6425fc094a0c15dc8755829e3c8377c38f65194918996d5d7e8ef191c9da5c)(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0):
     dependencies:
       '@electron/asar': 3.4.1
       '@electron/fuses': 1.8.0
@@ -1461,7 +1466,7 @@ snapshots:
 
   dmg-builder@26.18.0(electron-builder-squirrel-windows@26.18.0):
     dependencies:
-      app-builder-lib: 26.18.0(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0)
+      app-builder-lib: 26.18.0(patch_hash=bd6425fc094a0c15dc8755829e3c8377c38f65194918996d5d7e8ef191c9da5c)(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0)
       builder-util: 26.16.0
       fs-extra: 10.1.0
       js-yaml: 4.3.2
@@ -1491,7 +1496,7 @@ snapshots:
 
   electron-builder-squirrel-windows@26.18.0(dmg-builder@26.18.0):
     dependencies:
-      app-builder-lib: 26.18.0(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0)
+      app-builder-lib: 26.18.0(patch_hash=bd6425fc094a0c15dc8755829e3c8377c38f65194918996d5d7e8ef191c9da5c)(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0)
       builder-util: 26.16.0
       electron-winstaller: 5.4.0
     transitivePeerDependencies:
@@ -1500,7 +1505,7 @@ snapshots:
 
   electron-builder@26.18.0(electron-builder-squirrel-windows@26.18.0):
     dependencies:
-      app-builder-lib: 26.18.0(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0)
+      app-builder-lib: 26.18.0(patch_hash=bd6425fc094a0c15dc8755829e3c8377c38f65194918996d5d7e8ef191c9da5c)(dmg-builder@26.18.0)(electron-builder-squirrel-windows@26.18.0)
       builder-util: 26.16.0
       builder-util-runtime: 9.7.0
       chalk: 4.1.2

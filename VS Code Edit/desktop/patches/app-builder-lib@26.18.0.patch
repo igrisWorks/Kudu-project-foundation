@@ -1,0 +1,56 @@
+diff --git a/out/targets/appimage/appImageUtil.js b/out/targets/appimage/appImageUtil.js
+index 401e5f83b8c6a549b7cb54e13e473090a9426c83..30baac9febb689418242c1bdd60537422b4cd8e5 100644
+--- a/out/targets/appimage/appImageUtil.js
++++ b/out/targets/appimage/appImageUtil.js
+@@ -202,35 +202,33 @@ fi
+ 
+ isEulaAccepted=1
+ 
+-HAVE_NO_SANDBOX=0
++if [ "$(id -u)" -eq 0 ] ; then
++  trap - EXIT
++  printf '%s\\n' "KuduNS must be run as an unprivileged desktop user." >&2
++  exit 1
++fi
++
+ for arg in "\${args[@]}" ; do
+   if [ "$arg" = --no-sandbox ] ; then
+-    HAVE_NO_SANDBOX=1
+-    break
++    trap - EXIT
++    printf '%s\\n' "KuduNS refuses to start with --no-sandbox." >&2
++    exit 1
+   fi
+ done
+-NO_SANDBOX=()
+-# Use 'unshare -Ur true' as a heuristic to detect whether user namespaces are available.
+-# Notes:
+-#   - When running as root, this check will always succeed even if the sandbox configuration
+-#     actually relies on unprivileged user namespaces. In practice, Chrome/Electron usually
+-#     disables or adjusts the sandbox separately when running as root, so this probe is mostly
+-#     a no-op in that scenario.
+-#   - On minimal systems (e.g. Alpine or stripped-down containers) 'unshare' may not exist.
+-#     In that case the shell will return exit code 127 ("command not found"), which will cause
+-#     us to add '--no-sandbox'. This is an intentional fail-safe: we prefer the app to start
+-#     without sandboxing rather than crash on startup.
+-if [ $HAVE_NO_SANDBOX -eq 0 ] && ! unshare -Ur true 2>/dev/null ; then
+-  NO_SANDBOX=(--no-sandbox)
++
++if ! command -v unshare >/dev/null 2>&1 || ! unshare -Ur true 2>/dev/null ; then
++  trap - EXIT
++  printf '%s\\n' "KuduNS requires unprivileged user namespaces; refusing to launch without the Chromium sandbox." >&2
++  exit 1
+ fi
+ 
+ atexit()
+ {
+   if [ $isEulaAccepted == 1 ] ; then
+     if [ $NUMBER_OF_ARGS -eq 0 ] ; then
+-      exec "$BIN" "\${NO_SANDBOX[@]}"
++      exec "$BIN"
+     else
+-      exec "$BIN" "\${NO_SANDBOX[@]}" "\${args[@]}"
++      exec "$BIN" "\${args[@]}"
+     fi
+   fi
+ }
