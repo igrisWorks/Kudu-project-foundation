@@ -1,3 +1,4 @@
 - [Docker runtime checks](docker-runtime-checks.md) — this workspace can block container exec/health checks and bridge DNS; host networking worked for registry access.
 - [Opt-in event mapping](event-mapping-boundary.md) — active mappings may relax source shape, but no-map imports must preserve legacy parsing and payload behavior.
 - [Desktop dependency isolation](desktop-build-isolation.md) — keep Electron tools outside the root workspace so server Docker installs stay unchanged.
+- [AppImage sandbox defaults](desktop-appimage-sandbox.md) — inspect launch arguments and fail closed if the Chromium sandbox cannot be used.

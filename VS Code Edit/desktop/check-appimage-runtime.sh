@@ -14,6 +14,11 @@ if [[ "$(uname -m)" != "x86_64" ]]; then
   exit 2
 fi
 
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+  printf 'Do not launch KuduNS as root; use an unprivileged desktop user.\n' >&2
+  exit 1
+fi
+
 appimage="$(realpath -- "$appimage")"
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf -- "$temporary_dir"' EXIT
@@ -33,12 +38,25 @@ if [[ ! -x "$app_binary" ]]; then
   exit 1
 fi
 
-missing_libraries="$(ldd "$app_binary" 2>&1 | awk '/not found/ { print $1 }' | sort -u)"
+missing_libraries=""
+for executable in \
+  "$app_binary" \
+  "$app_dir/chrome_crashpad_handler" \
+  "$app_dir/chrome-sandbox" \
+  "$app_dir/libffmpeg.so" \
+  "$app_dir/libvk_swiftshader.so" \
+  "$app_dir/libvulkan.so.1"; do
+  [[ -f "$executable" ]] || continue
+  unresolved="$(ldd "$executable" 2>&1 | awk '/not found/ { print $1 }' | sort -u)"
+  if [[ -n "$unresolved" ]]; then
+    missing_libraries+=$'\n'"$(basename "$executable"): $unresolved"
+  fi
+done
 if [[ -n "$missing_libraries" ]]; then
-  printf 'Missing shared libraries required by the packaged Electron executable:\n%s\n' "$missing_libraries" >&2
+  printf 'Missing shared libraries in the AppImage:\n%s\n' "$missing_libraries" >&2
   failures=1
 else
-  printf 'Electron shared-library dependencies: present.\n'
+  printf 'Bundled executable and library dependencies: present.\n'
 fi
 
 if ! command -v ldconfig >/dev/null 2>&1 || ! ldconfig -p 2>/dev/null | grep -Fq 'libfuse.so.2'; then

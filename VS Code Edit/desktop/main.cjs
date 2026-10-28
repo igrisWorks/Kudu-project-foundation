@@ -215,12 +215,15 @@ function registerConnectionIpc() {
 }
 
 app.whenReady().then(async () => {
-  if (isSandboxDisabledByArgs(process.argv)) {
+  const runningAsRoot = process.platform === "linux"
+    && typeof process.getuid === "function"
+    && process.getuid() === 0;
+  if (isSandboxDisabledByArgs(process.argv) || runningAsRoot) {
     await dialog.showMessageBox({
       type: "error",
       title: "KuduNS sandbox support is required",
-      message: "KuduNS cannot start with Electron's sandbox disabled.",
-      detail: "Enable unprivileged user namespaces on this Linux host. The desktop will not bypass the sandbox requirement.",
+      message: "KuduNS requires Electron's sandbox and an unprivileged desktop user.",
+      detail: "Run as a regular user with unprivileged user namespaces enabled. The desktop will not bypass the sandbox requirement.",
     });
     app.quit();
     return;
