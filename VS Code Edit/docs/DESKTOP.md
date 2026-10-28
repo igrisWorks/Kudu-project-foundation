@@ -73,16 +73,29 @@ It extracts the AppImage into a temporary directory, verifies that AppRun reject
 
 On a compatible desktop session:
 
-1. Confirm the file is x86_64 with `file release/desktop/KuduNS-0.1.0.AppImage` and verify its transferred checksum.
-2. Run `./release/desktop/KuduNS-0.1.0.AppImage` without sandbox-disabling flags.
-3. Connect only to a disposable or trusted test KuduNS server. Confirm the native prompt, `/healthz` check, and the existing KuduNS sign-in.
-4. Verify malformed URLs and non-HTTPS schemes are rejected, unacknowledged HTTP is blocked, the HTTP warning appears after acknowledgement, and an unavailable server produces a sanitized failure.
-5. After connecting, attempt a cross-origin navigation and an external HTTPS link. Cross-origin navigation must remain blocked; the external link may open only in the system browser.
-6. Review application and system logs and configuration locations to confirm no password or session credential was written.
+Use only a disposable test server and test account. Bind the server to loopback for same-machine tests. If the client must connect from another machine, use an isolated private LAN with firewall rules; do not bind or forward the test service to a public interface. Use test-only database contents, credentials, and session settings—never production credentials or data. Prefer HTTPS with a certificate trusted by the test client. HTTP remains subject to the explicit warning and is for loopback or an isolated LAN only.
+
+Record these outcomes separately; a pass in one does not establish the next:
+
+1. **Packaging:** From `VS Code Edit/`, `pnpm desktop:package:appimage` exits successfully and creates `release/desktop/KuduNS-0.1.0.AppImage`. This verifies packaging only.
+2. **Prerequisites:** `pnpm desktop:check:runtime` exits successfully on the target host. This does not launch Electron.
+3. **GUI launch:** Run `./release/desktop/KuduNS-0.1.0.AppImage` as a normal user, without `sudo` or sandbox-disabling flags, and confirm the connection window appears.
+4. **Health check:** Connect to the disposable server and confirm the desktop accepts its `GET /healthz` response before opening the app.
+5. **Sign-in and navigation:** Sign in with the test account, verify cross-origin navigation is blocked, and confirm external HTTPS links open only in the system browser.
+
+Also verify malformed URLs and non-HTTPS schemes are rejected, unacknowledged HTTP is blocked, the HTTP warning appears after acknowledgement, and an unavailable server produces a sanitized failure. Review application and system logs and configuration locations to confirm no password or session credential was written.
 
 The generated AppRun refuses root execution, explicit `--no-sandbox` arguments, and hosts where `unshare -Ur true` fails. It never forwards or injects `--no-sandbox`; the Electron main-process guard remains defense in depth. Do not work around these checks; enable user namespaces only if permitted by the host's security policy.
 
-For offline transfer, create a checksum on the build machine with `sha256sum release/desktop/KuduNS-0.1.0.AppImage > release/desktop/KuduNS-0.1.0.AppImage.sha256`. Transfer the AppImage, checksum, and runtime prerequisite list through approved media. On the destination, run `sha256sum -c KuduNS-0.1.0.AppImage.sha256`. Stage the listed OS packages and their transitive dependencies from the matching signed Ubuntu/Debian repository or an approved local package mirror; the AppImage does not include these host libraries.
+For offline transfer, create and verify the checksum on the build machine from the artifact directory:
+
+```sh
+cd release/desktop
+sha256sum KuduNS-0.1.0.AppImage > KuduNS-0.1.0.AppImage.sha256
+sha256sum -c KuduNS-0.1.0.AppImage.sha256
+```
+
+Transfer both files and the runtime prerequisite list through approved media. On the destination, place the AppImage and checksum side by side, change into that directory, and run the same `sha256sum -c KuduNS-0.1.0.AppImage.sha256` command. This verifies the file on both machines without embedding a stale checksum in this guide. Stage the listed OS packages and their transitive dependencies from the matching signed Ubuntu/Debian repository or an approved local package mirror; the AppImage does not include these host libraries.
 
 Troubleshooting:
 
