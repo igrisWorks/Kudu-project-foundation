@@ -15,6 +15,12 @@
     "start": "pnpm --filter @kudu/backend start",
     "db:up": "docker compose up -d db",
     "db:down": "docker compose stop db",
-    "db:migrate": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/backend build && pnpm --filter @kudu/backend migrate"
+    "db:migrate": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/backend build && pnpm --filter @kudu/backend migrate",
+    "desktop:build:renderer": "pnpm --filter @kudu/frontend run build:desktop",
+    "desktop:dev": "pnpm run desktop:build:renderer && pnpm --dir desktop run dev",
+    "desktop:test:policy": "node --test desktop/connection-policy.test.cjs",
+    "desktop:package:deb": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:deb",
+    "desktop:package:appimage": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:appimage",
+    "desktop:package:linux": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:linux"
   }
 }

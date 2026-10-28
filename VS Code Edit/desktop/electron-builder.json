@@ -1,0 +1,35 @@
+{
+  "appId": "com.kuduns.desktop",
+  "productName": "KuduNS",
+  "asar": true,
+  "directories": {
+    "output": "../release/desktop"
+  },
+  "files": [
+    "main.cjs",
+    "preload.cjs",
+    "connection-policy.cjs",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "../frontend/dist-desktop",
+      "to": "renderer",
+      "filter": [
+        "desktop.html",
+        "assets/**",
+        "kuduns-wordmark.svg",
+        "kuduns-mark.svg",
+        "kuduns-favicon.svg"
+      ]
+    }
+  ],
+  "linux": {
+    "category": "Utility",
+    "syncDesktopName": true,
+    "target": [
+      { "target": "deb", "arch": ["x64"] },
+      { "target": "AppImage", "arch": ["x64"] }
+    ]
+  }
+}

@@ -1,0 +1,126 @@
+:root {
+  font-family: "Aptos", "Segoe UI", sans-serif;
+  color: #203047;
+  background: #f3f5f8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #desktop-root {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body { min-height: 100vh; }
+button, input { font: inherit; }
+
+.desktop-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(ellipse at 75% 20%, rgba(57,119,213,.17), transparent 34%),
+    linear-gradient(135deg, #0c1a30, #10223e 58%, #18375f);
+}
+
+.desktop-panel {
+  width: min(100%, 650px);
+  padding: clamp(28px, 6vw, 58px);
+  border: 1px solid rgba(214,226,243,.8);
+  border-radius: 10px;
+  background: #f9fafc;
+  box-shadow: 0 26px 80px rgba(0,0,0,.24);
+}
+
+.desktop-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid #dce2e9;
+}
+
+.desktop-brand img { display: block; width: 150px; max-height: 44px; object-fit: contain; object-position: left center; }
+.desktop-edition, .desktop-eyebrow, .local-mode-label {
+  color: #647286;
+  font: 10px "SFMono-Regular", Consolas, monospace;
+  letter-spacing: .13em;
+}
+
+.desktop-intro { padding-top: 34px; }
+.desktop-eyebrow { display: flex; align-items: center; gap: 9px; }
+.desktop-eyebrow span { width: 20px; height: 1px; background: #3977d5; }
+.desktop-intro h1 { margin: 14px 0 9px; color: #10223e; font-size: clamp(27px, 4vw, 36px); line-height: 1.12; letter-spacing: -.04em; font-weight: 620; }
+.desktop-intro p, .local-mode p { margin: 0; color: #647286; font-size: 14px; line-height: 1.65; }
+
+.server-form { display: grid; gap: 10px; margin-top: 28px; }
+.server-form > label:first-child { color: #31435a; font-size: 12px; font-weight: 650; }
+.server-form > input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 13px;
+  border: 1px solid #cbd4df;
+  border-radius: 5px;
+  background: #fff;
+  color: #203047;
+  font-size: 14px;
+  outline: none;
+}
+.server-form > input:focus { border-color: #3977d5; box-shadow: 0 0 0 3px rgba(57,119,213,.15); }
+.desktop-hint, .desktop-confirmation { margin: 0; color: #8290a1; font-size: 11px; line-height: 1.55; }
+
+.http-acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 4px 0;
+  padding: 12px;
+  border: 1px solid #d9c99d;
+  border-radius: 5px;
+  background: #fffaf0;
+  color: #5d4a21;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.http-acknowledgement input { margin: 2px 0 0; accent-color: #3977d5; }
+
+.desktop-primary, .desktop-secondary {
+  min-height: 42px;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.desktop-primary { margin-top: 6px; border: 1px solid #3977d5; background: #3977d5; color: #fff; }
+.desktop-primary:hover:not(:disabled) { border-color: #2864ba; background: #2864ba; }
+.desktop-primary:disabled { opacity: .65; cursor: progress; }
+.desktop-secondary { padding: 0 13px; border: 1px solid #cbd4df; background: #fff; color: #31435a; }
+.desktop-secondary:hover { border-color: #9eacc0; background: #f7f9fb; }
+
+.desktop-status { min-height: 20px; color: #a5443e; font-size: 12px; line-height: 1.5; }
+.local-mode { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 16px; margin-top: 28px; padding: 19px 0 0; border-top: 1px solid #dce2e9; }
+.local-mode-label { font-size: 9px; }
+.local-mode h2 { margin: 6px 0 3px; color: #203047; font-size: 15px; font-weight: 650; }
+.local-mode p { font-size: 12px; }
+.local-guidance { grid-column: 1 / -1; padding: 14px 16px; border-left: 2px solid #3977d5; background: #edf4fd; color: #31435a; font-size: 12px; line-height: 1.6; }
+.local-guidance p { margin: 0 0 9px; color: inherit; font-size: 12px; }
+.local-guidance p:last-child { margin: 9px 0 0; }
+.local-guidance ul { margin: 0; padding-left: 19px; }
+.local-guidance li + li { margin-top: 5px; }
+.desktop-footer { margin-top: 24px; color: #8290a1; font-size: 10px; line-height: 1.5; }
+
+button:focus-visible, input:focus-visible { outline: 3px solid rgba(57,119,213,.45); outline-offset: 2px; }
+
+@media (max-width: 560px) {
+  .desktop-shell { padding: 14px; }
+  .desktop-panel { padding: 25px 21px; }
+  .local-mode { grid-template-columns: 1fr; }
+  .desktop-secondary { justify-self: start; }
+}

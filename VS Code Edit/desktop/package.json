@@ -1,0 +1,23 @@
+{
+  "name": "kuduns-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Linux desktop shell for KuduNS",
+  "desktopName": "KuduNS",
+  "packageManager": "pnpm@10.26.1",
+  "engines": {
+    "node": ">=24.0.0 <25",
+    "pnpm": "10.26.1"
+  },
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "package:deb": "electron-builder --config electron-builder.json --linux deb --x64",
+    "package:appimage": "electron-builder --config electron-builder.json --linux AppImage --x64",
+    "package:linux": "electron-builder --config electron-builder.json --linux deb AppImage --x64"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0"
+  }
+}

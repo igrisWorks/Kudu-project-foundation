@@ -23,6 +23,10 @@ The password hash contains `$`; quote its value with single quotes in `.env`. Fo
 
 For production, use the Docker Compose procedure in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). It builds the versioned production image, waits for PostgreSQL, applies migrations once, and starts the app only after migration succeeds. The same guide covers backup/restore and transferring images to offline hosts.
 
+## Desktop shell
+
+The Linux desktop shell and its current connection-mode limitations are documented in [docs/DESKTOP.md](docs/DESKTOP.md).
+
 ## Project map
 
 - `frontend/` — React and Vite UI.
