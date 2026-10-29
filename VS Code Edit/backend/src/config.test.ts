@@ -17,6 +17,8 @@ test("loads a valid PostgreSQL URL and applies local defaults", () => {
         cookieSecure: true,
       },
       localMode: false,
+      localDocker: false,
+      localDockerPort: 3000,
     },
   );
 });
@@ -91,7 +93,36 @@ test("local mode does not require database or operator authentication configurat
       cookieSecure: true,
     },
     localMode: true,
+    localDocker: false,
+    localDockerPort: 3000,
   });
+});
+
+test("Docker local mode requires explicit no-login mode and a separate proxy port", () => {
+  const config = loadConfig({
+    KUDU_LOCAL_MODE: "true",
+    KUDU_LOCAL_DOCKER: "true",
+    PORT: "3001",
+    KUDU_LOCAL_DOCKER_PORT: "3000",
+    NODE_ENV: "development",
+  });
+  assert.equal(config.host, "127.0.0.1");
+  assert.equal(config.port, 3001);
+  assert.equal(config.localDocker, true);
+  assert.equal(config.localDockerPort, 3000);
+  assert.throws(
+    () => loadConfig({ KUDU_LOCAL_DOCKER: "true" }),
+    /requires KUDU_LOCAL_MODE=true/,
+  );
+  assert.throws(
+    () => loadConfig({
+      KUDU_LOCAL_MODE: "true",
+      KUDU_LOCAL_DOCKER: "true",
+      PORT: "3000",
+      KUDU_LOCAL_DOCKER_PORT: "3000",
+    }),
+    /must differ from the loopback API port/,
+  );
 });
 
 test("local no-login mode fails closed in production and on non-loopback binds", () => {

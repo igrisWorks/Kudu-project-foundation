@@ -1,0 +1,77 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        KUDU_VERSION: ${KUDU_VERSION:-0.1.0}
+    image: kuduns-local:${KUDU_VERSION:-0.1.0}
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: development
+      KUDU_LOCAL_MODE: "true"
+      KUDU_LOCAL_DOCKER: "true"
+      HOST: "127.0.0.1"
+      PORT: "3001"
+      KUDU_LOCAL_DOCKER_PORT: "3000"
+      KUDU_LOCAL_DATABASE_SETTINGS_PATH: /var/lib/kudu/settings.json
+      LOG_LEVEL: ${KUDU_LOG_LEVEL:-info}
+    ports:
+      - "127.0.0.1:${KUDU_LOCAL_WEB_PORT:-3000}:3000"
+    volumes:
+      - kudu-local-settings:/var/lib/kudu
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - shared-postgres
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  db:
+    profiles:
+      - local-postgres
+    image: postgres:18.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: ${KUDU_LOCAL_POSTGRES_ADMIN_USER:-kuduadmin}
+      POSTGRES_PASSWORD: ${KUDU_LOCAL_POSTGRES_ADMIN_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${KUDU_LOCAL_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - kudu-local-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    networks:
+      - default
+      - shared-postgres
+
+volumes:
+  kudu-local-settings:
+  kudu-local-postgres:
+
+networks:
+  shared-postgres:
+    name: ${KUDU_POSTGRES_NETWORK:-kuduns-local-postgres}
+    external: ${KUDU_POSTGRES_NETWORK_EXTERNAL:-false}

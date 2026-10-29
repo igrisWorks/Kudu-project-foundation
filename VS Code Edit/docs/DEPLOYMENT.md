@@ -30,7 +30,7 @@ Compose binds the app and PostgreSQL ports to `127.0.0.1`; PostgreSQL is not pub
 
 The container gets configuration from Compose at runtime; the Dockerfile has no secret build arguments or secret files. `.env`, `.env.sources`, local imports, and database dumps are excluded from the Docker build context. Production requires a valid auth hash, a session secret, database settings, and `KUDU_COOKIE_SECURE=true`; missing or invalid authentication configuration produces an actionable startup error before the app or migration runner can access the database.
 
-`KUDU_LOCAL_MODE=true` is a development/local-only switch for the no-login Local Web Edition. It is not a production deployment option: the backend rejects it whenever `NODE_ENV=production` and rejects any non-loopback bind. Do not pass it through Compose or use the local credential settings file as production secret storage. Production continues to use the authenticated application, protected environment secrets, HTTPS, and the existing migration service.
+`KUDU_LOCAL_MODE=true` is a development/local-only switch for the no-login Local Web Edition. It is not a production deployment option: the backend rejects it whenever `NODE_ENV=production` and rejects any non-loopback application bind. The production `docker-compose.yml` does not enable local mode. A separate, explicitly local Docker configuration is documented in [LOCAL-DOCKER.md](LOCAL-DOCKER.md); do not expose that no-login service beyond host loopback or use its settings volume as production secret storage. Production continues to use the authenticated application, protected environment secrets, HTTPS, and the existing migration service.
 
 ## Authentication setup
 

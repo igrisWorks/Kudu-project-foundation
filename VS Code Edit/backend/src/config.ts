@@ -7,6 +7,8 @@ export interface AppConfig {
   logLevel: string;
   auth: AuthConfiguration;
   localMode: boolean;
+  localDocker: boolean;
+  localDockerPort: number;
 }
 
 const allowedLogLevels = new Set(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
@@ -17,6 +19,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     throw new Error("KUDU_LOCAL_MODE must be true or false.");
   }
   const localMode = rawLocalMode === "true";
+  const rawLocalDocker = environment.KUDU_LOCAL_DOCKER?.trim().toLowerCase();
+  if (rawLocalDocker && rawLocalDocker !== "true" && rawLocalDocker !== "false") {
+    throw new Error("KUDU_LOCAL_DOCKER must be true or false.");
+  }
+  const localDocker = rawLocalDocker === "true";
+  if (localDocker && !localMode) {
+    throw new Error("KUDU_LOCAL_DOCKER requires KUDU_LOCAL_MODE=true.");
+  }
   const isProduction = environment.NODE_ENV?.trim().toLowerCase() === "production";
   if (localMode && isProduction) {
     throw new Error("KUDU_LOCAL_MODE is only available outside production.");
@@ -65,6 +75,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
   if (localMode && !["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase())) {
     throw new Error("KUDU_LOCAL_MODE requires HOST to be loopback (127.0.0.1, ::1, or localhost).");
   }
+  const rawLocalDockerPort = environment.KUDU_LOCAL_DOCKER_PORT ?? "3000";
+  const localDockerPort = Number(rawLocalDockerPort);
+  if (!Number.isInteger(localDockerPort) || localDockerPort < 1 || localDockerPort > 65_535) {
+    throw new Error("KUDU_LOCAL_DOCKER_PORT must be an integer between 1 and 65535.");
+  }
+  if (localDocker && localDockerPort === port) {
+    throw new Error("KUDU_LOCAL_DOCKER_PORT must differ from the loopback API port.");
+  }
 
   if (isProduction) {
     if (!new AuthManager(auth).configured) {
@@ -86,5 +104,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     logLevel,
     auth,
     localMode,
+    localDocker,
+    localDockerPort,
   };
 }

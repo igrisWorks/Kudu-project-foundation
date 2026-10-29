@@ -38,8 +38,10 @@ COPY --from=build --chown=node:node /app/frontend/dist ./frontend/dist
 COPY --from=build --chown=node:node /app/database/migrations ./database/migrations
 
 RUN rm -rf backend/dist/test-support \
-    && rm -f backend/dist/*.test.js backend/dist/auth-cli.js
+    && rm -f backend/dist/*.test.js backend/dist/auth-cli.js \
+    && mkdir -p /var/lib/kudu \
+    && chown node:node /var/lib/kudu
 
 USER node
-EXPOSE 3000
+EXPOSE 3000 3001
 CMD ["node", "backend/dist/index.js"]

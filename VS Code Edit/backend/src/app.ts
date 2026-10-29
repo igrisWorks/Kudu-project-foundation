@@ -27,6 +27,7 @@ interface AppOptions {
   databaseCheck?: (db: Kysely<Database>) => Promise<void>;
   auth?: AuthConfiguration;
   localMode?: boolean;
+  localDocker?: boolean;
   localDatabase?: LocalDatabaseManager;
 }
 
@@ -146,7 +147,10 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     cookieSecure: process.env.KUDU_COOKIE_SECURE?.trim().toLowerCase() !== "false",
   });
   registerAuthenticationGuard(app, auth, { localMode: options.localMode });
-  registerAuthRoutes(app, auth, { localMode: options.localMode });
+  registerAuthRoutes(app, auth, {
+    localMode: options.localMode,
+    localDocker: options.localDocker,
+  });
   if (options.localMode && options.localDatabase) {
     registerLocalDatabaseRoutes(app, options.localDatabase);
   }

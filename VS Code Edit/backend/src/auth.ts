@@ -365,12 +365,17 @@ export function registerAuthenticationGuard(
 export function registerAuthRoutes(
   app: FastifyInstance,
   auth: AuthManager,
-  options: { localMode?: boolean } = {},
+  options: { localMode?: boolean; localDocker?: boolean } = {},
 ): void {
   app.get("/api/v1/auth/session", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
     if (options.localMode) {
-      return { configured: true, authenticated: true, localMode: true };
+      return {
+        configured: true,
+        authenticated: true,
+        localMode: true,
+        ...(options.localDocker ? { localDocker: true } : {}),
+      };
     }
     const session = auth.getSession(request.headers.cookie);
     if (session) reply.header("Set-Cookie", auth.setCsrfCookie(session.csrfToken));

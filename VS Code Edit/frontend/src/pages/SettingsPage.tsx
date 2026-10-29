@@ -17,7 +17,7 @@ const defaults: LocalDatabaseForm = {
   username: "kudu",
 };
 
-export default function SettingsPage() {
+export default function SettingsPage({ dockerMode = false }: { dockerMode?: boolean }) {
   const [settings, setSettings] = useState<LocalDatabaseForm>(defaults);
   const [passwordConfigured, setPasswordConfigured] = useState(false);
   const [adminUsername, setAdminUsername] = useState("");
@@ -34,7 +34,9 @@ export default function SettingsPage() {
       const response = await getLocalDatabase();
       setSettings(current => ({
         ...current,
-        host: response.settings.host,
+        host: !response.status.configured && dockerMode
+          ? "host.docker.internal"
+          : response.settings.host,
         port: response.settings.port,
         database: response.settings.database,
         username: response.settings.username,
@@ -158,7 +160,11 @@ export default function SettingsPage() {
       <div>
         <div className="eyebrow"><span className="eyebrow-line" />LOCAL CONFIGURATION</div>
         <h1>Database settings</h1>
-        <p>Connect KuduNS to PostgreSQL on this computer. The browser never receives the saved password.</p>
+        <p>
+          {dockerMode
+            ? "Connect this local Docker instance to PostgreSQL. The browser never receives the saved password."
+            : "Connect KuduNS to PostgreSQL on this computer. The browser never receives the saved password."}
+        </p>
       </div>
     </div>
 
@@ -181,7 +187,11 @@ export default function SettingsPage() {
           <div className="field">
             <label htmlFor="db-host">Host or address</label>
             <input id="db-host" value={settings.host} onChange={event => update("host", event.target.value)} autoComplete="off" required />
-            <span className="field-hint">Loopback only: 127.0.0.1, ::1, or localhost.</span>
+            <span className="field-hint">
+              {dockerMode
+                ? "Use host.docker.internal for PostgreSQL on the host, or the service name for a database on a shared Docker network. Do not use localhost for a separate database."
+                : "Loopback only: 127.0.0.1, ::1, or localhost."}
+            </span>
           </div>
           <div className="field">
             <label htmlFor="db-port">Port</label>
@@ -257,7 +267,7 @@ export default function SettingsPage() {
         </div>
         <label className="check-row settings-confirm">
           <input type="checkbox" checked={confirmInitialization} onChange={event => setConfirmInitialization(event.target.checked)} />
-          <span>I authorize creating only the missing database and/or application role above.</span>
+          <span>I authorize creating missing objects and applying the required Kudu permissions above.</span>
         </label>
           <button className="button button-primary" type="button" disabled={busy !== null || !confirmInitialization || !adminUsername} onClick={() => void initializeDatabase()}>
           {busy === "save" ? "Initializing…" : "Initialize missing objects"}

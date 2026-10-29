@@ -43,6 +43,37 @@ test("local database settings accept loopback addresses and reject remote or mal
   }), /Database name/);
 });
 
+test("Docker local mode accepts explicit PostgreSQL network names but rejects wildcard binds", () => {
+  assert.equal(validateLocalDatabaseSettings({
+    host: "db",
+    port: 5432,
+    database: "kudu",
+    username: "kudu_app",
+    password: "a-local-only-password",
+  }, { allowRemoteHosts: true }).host, "db");
+  assert.equal(validateLocalDatabaseSettings({
+    host: "host.docker.internal",
+    port: 5432,
+    database: "kudu",
+    username: "kudu_app",
+    password: "a-local-only-password",
+  }, { allowRemoteHosts: true }).host, "host.docker.internal");
+  assert.throws(() => validateLocalDatabaseSettings({
+    host: "0.0.0.0",
+    port: 5432,
+    database: "kudu",
+    username: "kudu_app",
+    password: "a-local-only-password",
+  }, { allowRemoteHosts: true }), /valid PostgreSQL hostname or IP/);
+  assert.throws(() => validateLocalDatabaseSettings({
+    host: "db/path",
+    port: 5432,
+    database: "kudu",
+    username: "kudu_app",
+    password: "a-local-only-password",
+  }, { allowRemoteHosts: true }), /valid PostgreSQL hostname or IP/);
+});
+
 test("database URL parsing decodes credentials without exposing them in returned safe form", () => {
   const settings = settingsFromDatabaseUrl("postgresql://kudu_user:p%40ss%3Aword@localhost:5433/kudu");
   assert.deepEqual(settings, {

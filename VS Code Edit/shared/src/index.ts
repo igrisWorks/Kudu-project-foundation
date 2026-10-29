@@ -8,6 +8,7 @@ export interface AuthSessionResponse {
   configured: boolean;
   authenticated: boolean;
   localMode?: boolean;
+  localDocker?: boolean;
   expiresAt?: string;
 }
 

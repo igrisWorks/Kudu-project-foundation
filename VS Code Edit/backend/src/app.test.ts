@@ -59,6 +59,7 @@ test("local edition session is authenticated without operator credentials and wr
   const app = await createApp({
     db,
     localMode: true,
+    localDocker: true,
     localDatabase,
     databaseCheck: async () => undefined,
     logLevel: "silent",
@@ -76,7 +77,12 @@ test("local edition session is authenticated without operator credentials and wr
     headers: { host: "127.0.0.1:3000" },
   });
   assert.equal(session.statusCode, 200);
-  assert.deepEqual(session.json(), { configured: true, authenticated: true, localMode: true });
+  assert.deepEqual(session.json(), {
+    configured: true,
+    authenticated: true,
+    localMode: true,
+    localDocker: true,
+  });
 
   const unauthenticatedRead = await app.inject({
     method: "GET",

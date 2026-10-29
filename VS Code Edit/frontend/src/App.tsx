@@ -25,7 +25,7 @@ function NotFoundPage() {
 export default function App() {
   const [session, setSession] = useState<
     | { kind: "loading" }
-    | { kind: "ready"; configured: boolean; authenticated: boolean; localMode: boolean }
+    | { kind: "ready"; configured: boolean; authenticated: boolean; localMode: boolean; localDocker: boolean }
     | { kind: "unavailable"; message: string }
   >({ kind: "loading" });
 
@@ -38,6 +38,7 @@ export default function App() {
         configured: response.configured,
         authenticated: response.authenticated,
         localMode: response.localMode === true,
+        localDocker: response.localDocker === true,
       });
     } catch (error) {
       setSession({
@@ -51,7 +52,7 @@ export default function App() {
     void checkSession();
     const onExpired = () => {
       setCsrfToken(null);
-      setSession({ kind: "ready", configured: true, authenticated: false, localMode: false });
+      setSession({ kind: "ready", configured: true, authenticated: false, localMode: false, localDocker: false });
     };
     window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
@@ -60,13 +61,13 @@ export default function App() {
   const handleLogin = async (password: string) => {
     const response = await login(password);
     if (!response.authenticated) throw new Error("Sign in was not completed.");
-    setSession({ kind: "ready", configured: true, authenticated: true, localMode: false });
+    setSession({ kind: "ready", configured: true, authenticated: true, localMode: false, localDocker: false });
   };
 
   const handleLogout = async () => {
     try {
       await logout();
-      setSession({ kind: "ready", configured: true, authenticated: false, localMode: false });
+      setSession({ kind: "ready", configured: true, authenticated: false, localMode: false, localDocker: false });
     } catch {
       setSession({ kind: "unavailable", message: "Sign out could not be confirmed. Reconnect and retry." });
     } finally {
@@ -75,6 +76,7 @@ export default function App() {
   };
 
   const localMode = session.kind === "ready" && session.localMode;
+  const localDocker = session.kind === "ready" && session.localDocker;
   if (session.kind !== "ready" || (!localMode && !session.authenticated)) {
     return <SignInPage
       configured={session.kind === "ready" ? session.configured : null}
@@ -98,7 +100,7 @@ export default function App() {
     <Route path="/data-sources/:id"><DataSourceDetailPage /></Route>
     <Route path="/events" component={EventsListPage} />
     <Route path="/events/:id" component={EventDetailPage} />
-    {localMode && <Route path="/settings" component={SettingsPage} />}
+    {localMode && <Route path="/settings"><SettingsPage dockerMode={localDocker} /></Route>}
     <Route><NotFoundPage /></Route>
   </Switch></AppShell>;
 }

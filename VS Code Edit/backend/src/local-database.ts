@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { isIP } from "node:net";
+import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Kysely, PostgresDialect } from "kysely";
@@ -34,16 +35,24 @@ export interface LocalDatabaseStatus {
 }
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const settingsPath = resolve(root, ".kudu-local-database.json");
+const defaultSettingsPath = resolve(root, ".kudu-local-database.json");
 const migrationsDirectory = resolve(root, "database/migrations");
 const databaseNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+
+function settingsPath(): string {
+  const configured = process.env.KUDU_LOCAL_DATABASE_SETTINGS_PATH?.trim();
+  return configured ? resolve(root, configured) : defaultSettingsPath;
+}
 
 function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
   return normalized === "localhost" || normalized === "::1" || /^127(?:\.\d{1,3}){3}$/.test(normalized);
 }
 
-export function validateLocalDatabaseSettings(value: unknown): LocalDatabaseSettings {
+export function validateLocalDatabaseSettings(
+  value: unknown,
+  options: { allowRemoteHosts?: boolean } = {},
+): LocalDatabaseSettings {
   if (!value || typeof value !== "object") throw new Error("Enter database connection details.");
   const input = value as Record<string, unknown>;
   const host = typeof input.host === "string" ? input.host.trim() : "";
@@ -51,8 +60,20 @@ export function validateLocalDatabaseSettings(value: unknown): LocalDatabaseSett
   const database = typeof input.database === "string" ? input.database.trim() : "";
   const username = typeof input.username === "string" ? input.username.trim() : "";
   const password = typeof input.password === "string" ? input.password : "";
-  if (!host || host.length > 253 || /[\s/\\@?#]/.test(host) || !isLoopbackHost(host)) {
-    throw new Error("Database host must be a loopback address such as 127.0.0.1 or localhost.");
+  const normalizedHost = host.replace(/^\[|\]$/g, "");
+  const validRemoteHost = options.allowRemoteHosts === true && (
+    isIP(normalizedHost) !== 0 ||
+    normalizedHost.length <= 253 &&
+      normalizedHost.split(".").every(label => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label))
+  );
+  if (
+    !host || host.length > 253 || /[\s/\\@?#]/.test(host) ||
+    (!isLoopbackHost(host) && !validRemoteHost) ||
+    (options.allowRemoteHosts && ["0.0.0.0", "::"].includes(normalizedHost))
+  ) {
+    throw new Error(options.allowRemoteHosts
+      ? "Database host must be a valid PostgreSQL hostname or IP address."
+      : "Database host must be a loopback address such as 127.0.0.1 or localhost.");
   }
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error("Database port must be an integer between 1 and 65535.");
@@ -69,7 +90,10 @@ export function validateLocalDatabaseSettings(value: unknown): LocalDatabaseSett
   return { host, port, database, username, password };
 }
 
-export function settingsFromDatabaseUrl(databaseUrl: string): LocalDatabaseSettings {
+export function settingsFromDatabaseUrl(
+  databaseUrl: string,
+  options: { allowRemoteHosts?: boolean } = {},
+): LocalDatabaseSettings {
   let url: URL;
   try {
     url = new URL(databaseUrl);
@@ -85,7 +109,7 @@ export function settingsFromDatabaseUrl(databaseUrl: string): LocalDatabaseSetti
     database: decodeURIComponent(url.pathname.replace(/^\/+/, "")),
     username: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
-  });
+  }, options);
 }
 
 function connectionString(settings: LocalDatabaseSettings): string {
@@ -207,13 +231,14 @@ async function secureFile(path: string): Promise<void> {
   }
 }
 
-async function readStoredSettings(): Promise<LocalDatabaseSettings | null> {
+async function readStoredSettings(allowRemoteHosts = false): Promise<LocalDatabaseSettings | null> {
+  const path = settingsPath();
   try {
-    const info = await stat(settingsPath);
+    const info = await stat(path);
     if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
       throw new Error("The local database settings file has permissions that are too broad. Restrict it to the current user.");
     }
-    const envelope: unknown = JSON.parse(await readFile(settingsPath, "utf8"));
+    const envelope: unknown = JSON.parse(await readFile(path, "utf8"));
     if (!envelope || typeof envelope !== "object" || !("encoding" in envelope) || !("settings" in envelope)) {
       throw new Error("The local database settings file has an unsupported format.");
     }
@@ -226,7 +251,7 @@ async function readStoredSettings(): Promise<LocalDatabaseSettings | null> {
     } else {
       throw new Error("The local database settings are protected for a different operating system or user.");
     }
-    return validateLocalDatabaseSettings(parsed);
+    return validateLocalDatabaseSettings(parsed, { allowRemoteHosts });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -239,7 +264,8 @@ async function readStoredSettings(): Promise<LocalDatabaseSettings | null> {
 }
 
 async function writeStoredSettings(settings: LocalDatabaseSettings): Promise<void> {
-  const temporaryPath = `${settingsPath}.${randomUUID()}.tmp`;
+  const path = settingsPath();
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
   const json = JSON.stringify(settings);
   const envelope = process.platform === "win32"
     ? {
@@ -249,6 +275,7 @@ async function writeStoredSettings(settings: LocalDatabaseSettings): Promise<voi
         settings: await transformWindowsSecret(json, true),
       }
     : { encoding: "restricted-file", settings };
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const handle = await open(temporaryPath, "wx", 0o600);
   try {
     await secureFile(temporaryPath);
@@ -261,12 +288,12 @@ async function writeStoredSettings(settings: LocalDatabaseSettings): Promise<voi
   }
   await handle.close();
   try {
-    await rename(temporaryPath, settingsPath);
+    await rename(temporaryPath, path);
   } catch (error) {
     await unlink(temporaryPath).catch(() => undefined);
     throw error;
   }
-  await secureFile(settingsPath);
+  await secureFile(path);
 }
 
 function safeSettings(settings: LocalDatabaseSettings | null): SafeLocalDatabaseSettings {
@@ -293,7 +320,10 @@ export class LocalDatabaseManager {
 
   readonly db: Kysely<Database>;
 
-  private constructor(initialSettings: LocalDatabaseSettings | null) {
+  private constructor(
+    initialSettings: LocalDatabaseSettings | null,
+    private readonly allowRemoteHosts: boolean,
+  ) {
     this.configuredSettings = initialSettings;
     if (initialSettings) this.active = this.createActive(initialSettings);
     this.db = new Proxy({} as Kysely<Database>, {
@@ -306,10 +336,18 @@ export class LocalDatabaseManager {
     });
   }
 
-  static async create(initialDatabaseUrl?: string): Promise<LocalDatabaseManager> {
-    const storedSettings = await readStoredSettings();
-    const initialSettings = storedSettings ?? (initialDatabaseUrl ? settingsFromDatabaseUrl(initialDatabaseUrl) : null);
-    return new LocalDatabaseManager(initialSettings);
+  static async create(
+    initialDatabaseUrl?: string,
+    options: { allowRemoteHosts?: boolean } = {},
+  ): Promise<LocalDatabaseManager> {
+    const allowRemoteHosts = options.allowRemoteHosts === true;
+    const storedSettings = await readStoredSettings(allowRemoteHosts);
+    const initialSettings = storedSettings ?? (
+      initialDatabaseUrl
+        ? settingsFromDatabaseUrl(initialDatabaseUrl, { allowRemoteHosts })
+        : null
+    );
+    return new LocalDatabaseManager(initialSettings, allowRemoteHosts);
   }
 
   private createActive(settings: LocalDatabaseSettings): ActiveDatabase {
@@ -330,7 +368,9 @@ export class LocalDatabaseManager {
     const password = typeof input.password === "string" && input.password.length > 0
       ? input.password
       : this.configuredSettings?.password ?? "";
-    return validateLocalDatabaseSettings({ ...input, password });
+    return validateLocalDatabaseSettings({ ...input, password }, {
+      allowRemoteHosts: this.allowRemoteHosts,
+    });
   }
 
   async initializeMissingObjects(
@@ -348,6 +388,9 @@ export class LocalDatabaseManager {
       password: adminPassword,
     };
     const adminPool = createPool(adminSettings);
+    let candidate: ActiveDatabase | undefined;
+    let temporaryCreateGranted = false;
+    let initializationError: unknown;
     try {
       const state = await adminPool.query<{ role_exists: boolean; database_exists: boolean }>(
         `SELECT
@@ -380,7 +423,7 @@ export class LocalDatabaseManager {
           throw new Error("A new Kudu database role needs an application password of at least 12 UTF-8 bytes.");
         }
         const roleDdl = await adminPool.query<{ statement: string }>(
-          "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', $1, $2) AS statement",
+          "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', $1::text, $2::text) AS statement",
           [settings.username, settings.password],
         );
         await adminPool.query(roleDdl.rows[0]!.statement);
@@ -388,16 +431,17 @@ export class LocalDatabaseManager {
 
       if (!databaseExists) {
         const databaseDdl = await adminPool.query<{ statement: string }>(
-          "SELECT format('CREATE DATABASE %I OWNER %I', $1, $2) AS statement",
+          "SELECT format('CREATE DATABASE %I OWNER %I', $1::text, $2::text) AS statement",
           [settings.database, adminUsername],
         );
         await adminPool.query(databaseDdl.rows[0]!.statement);
       }
       const grantDdl = await adminPool.query<{ statement: string }>(
-        "SELECT format('GRANT CONNECT, CREATE ON DATABASE %I TO %I', $1, $2) AS statement",
+        "SELECT format('GRANT CONNECT, CREATE ON DATABASE %I TO %I', $1::text, $2::text) AS statement",
         [settings.database, settings.username],
       );
       await adminPool.query(grantDdl.rows[0]!.statement);
+      temporaryCreateGranted = true;
       const targetAdminPool = createPool({ ...adminSettings, database: settings.database });
       try {
         const schema = await targetAdminPool.query<{ exists: boolean }>(
@@ -405,7 +449,7 @@ export class LocalDatabaseManager {
         );
         if (schema.rows[0]?.exists) {
           const schemaGrant = await targetAdminPool.query<{ statement: string }>(
-            "SELECT format('GRANT USAGE, CREATE ON SCHEMA kudu TO %I', $1) AS statement",
+            "SELECT format('GRANT USAGE, CREATE ON SCHEMA kudu TO %I', $1::text) AS statement",
             [settings.username],
           );
           await targetAdminPool.query(schemaGrant.rows[0]!.statement);
@@ -414,7 +458,7 @@ export class LocalDatabaseManager {
             "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA kudu TO %I",
           ]) {
             const grant = await targetAdminPool.query<{ statement: string }>(
-              "SELECT format($1, $2) AS statement",
+              "SELECT format($1::text, $2::text) AS statement",
               [sql, settings.username],
             );
             await targetAdminPool.query(grant.rows[0]!.statement);
@@ -424,18 +468,29 @@ export class LocalDatabaseManager {
         await targetAdminPool.end();
       }
 
-      // Saving verifies the role, applies forward migrations, and stores its credentials.
-      await this.save(settings);
-      const revokeDdl = await adminPool.query<{ statement: string }>(
-        "SELECT format('REVOKE CREATE ON DATABASE %I FROM %I', $1, $2) AS statement",
-        [settings.database, settings.username],
-      );
-      await adminPool.query(revokeDdl.rows[0]!.statement);
+      candidate = await this.prepareActive(settings);
     } catch (error) {
-      throw new Error(safeConnectionError(error));
+      initializationError = error;
     } finally {
+      if (temporaryCreateGranted) {
+        try {
+          const revokeDdl = await adminPool.query<{ statement: string }>(
+            "SELECT format('REVOKE CREATE ON DATABASE %I FROM %I', $1::text, $2::text) AS statement",
+            [settings.database, settings.username],
+          );
+          await adminPool.query(revokeDdl.rows[0]!.statement);
+        } catch (error) {
+          initializationError ??= error;
+        }
+      }
       await adminPool.end();
     }
+    if (initializationError) {
+      await candidate?.db.destroy().catch(() => undefined);
+      throw new Error(safeConnectionError(initializationError));
+    }
+    if (!candidate) throw new Error("PostgreSQL initialization did not produce a verified application connection.");
+    await this.persistAndActivate(settings, candidate);
   }
 
   async test(settings: LocalDatabaseSettings): Promise<void> {
@@ -453,11 +508,27 @@ export class LocalDatabaseManager {
   }
 
   async save(settings: LocalDatabaseSettings): Promise<void> {
+    const candidate = await this.prepareActive(settings);
+    await this.persistAndActivate(settings, candidate);
+  }
+
+  private async prepareActive(settings: LocalDatabaseSettings): Promise<ActiveDatabase> {
     const candidate = this.createActive(settings);
     try {
       await candidate.pool.query("select 1");
       await verifyApplicationRole(candidate.pool);
       await runMigrations(candidate.pool, migrationsDirectory);
+    } catch (error) {
+      await candidate.db.destroy().catch(() => undefined);
+      this.lastError = safeConnectionError(error);
+      this.lastCheckedAt = new Date().toISOString();
+      throw new Error(this.lastError);
+    }
+    return candidate;
+  }
+
+  private async persistAndActivate(settings: LocalDatabaseSettings, candidate: ActiveDatabase): Promise<void> {
+    try {
       await writeStoredSettings(settings);
     } catch (error) {
       await candidate.db.destroy().catch(() => undefined);
