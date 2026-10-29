@@ -4,7 +4,17 @@ Kudu is an on-premises industrial data platform foundation. This directory is th
 
 ## Start locally
 
-Prerequisites: Node.js 24 LTS, pnpm 10.26.1 via Corepack, Docker Compose, and PostgreSQL 18 for the supported deployment setup.
+Prerequisites: Node.js 24 LTS and pnpm 10.26.1 via Corepack. For local development, use PostgreSQL 18 installed locally (Docker is optional). For production deployment, use Docker Compose as described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+On Windows, a guided no-Docker setup and launcher is available:
+
+```powershell
+.\scripts\kuduns.ps1 -Setup
+.\scripts\kuduns.ps1 -Check
+.\scripts\kuduns.ps1
+```
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#windows-local-development-without-docker) for PostgreSQL setup, credentials, troubleshooting, and safe updates.
 
 ```sh
 corepack enable

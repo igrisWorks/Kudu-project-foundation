@@ -7,7 +7,7 @@ function readHidden(prompt: string): Promise<string> {
 
   return new Promise((resolve, reject) => {
     let value = "";
-    process.stdout.write(prompt);
+    process.stderr.write(prompt);
     process.stdin.setRawMode(true);
     process.stdin.setEncoding("utf8");
     process.stdin.resume();
@@ -16,7 +16,7 @@ function readHidden(prompt: string): Promise<string> {
       process.stdin.off("data", onData);
       process.stdin.setRawMode(false);
       process.stdin.pause();
-      process.stdout.write("\n");
+      process.stderr.write("\n");
       if (error) reject(error);
       else resolve(value);
     };
