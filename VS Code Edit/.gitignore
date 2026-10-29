@@ -11,3 +11,6 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 /imports/
+/.kudu-local-database.json
+/.kudu-local-database.json.*.tmp
+/.kudu-dev.lock

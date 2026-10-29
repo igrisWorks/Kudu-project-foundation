@@ -7,6 +7,7 @@ export interface HealthResponse {
 export interface AuthSessionResponse {
   configured: boolean;
   authenticated: boolean;
+  localMode?: boolean;
   expiresAt?: string;
 }
 

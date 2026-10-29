@@ -26,6 +26,32 @@ import type {
   RestSyncResult,
 } from "@kudu/shared";
 
+export interface LocalDatabaseForm {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password?: string;
+}
+
+export interface LocalDatabaseResponse {
+  settings: {
+    host: string;
+    port: number;
+    database: string;
+    username: string;
+    passwordConfigured: boolean;
+  };
+  status: {
+    configured: boolean;
+    connected: boolean;
+    migrationState: "not_configured" | "unavailable" | "not_initialized" | "current" | "pending";
+    pendingMigrations: string[];
+    checkedAt: string;
+    error?: string;
+  };
+}
+
 let csrfToken: string | null = null;
 export const AUTH_EXPIRED_EVENT = "kudu:auth-expired";
 
@@ -107,9 +133,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function getAuthSession(): Promise<AuthSessionResponse> {
   const session = await request<AuthSessionResponse>("/api/v1/auth/session");
-  const token = session.authenticated ? readCsrfCookie() : null;
+  const token = session.authenticated && !session.localMode ? readCsrfCookie() : null;
   setCsrfToken(token);
-  if (session.authenticated && !token) {
+  if (session.authenticated && !session.localMode && !token) {
     throw new ApiError(
       "The browser did not accept Kudu's session security cookie. Check the HTTPS and cookie settings.",
       0,
@@ -117,6 +143,30 @@ export async function getAuthSession(): Promise<AuthSessionResponse> {
     );
   }
   return session;
+}
+
+export function getLocalDatabase(): Promise<LocalDatabaseResponse> {
+  return request("/api/v1/local/database");
+}
+
+export function testLocalDatabase(input: LocalDatabaseForm): Promise<{ connected: boolean; message: string }> {
+  return request("/api/v1/local/database/test", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function saveLocalDatabase(input: LocalDatabaseForm): Promise<LocalDatabaseResponse> {
+  return request("/api/v1/local/database/save", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function initializeLocalDatabase(input: LocalDatabaseForm & {
+  adminUsername: string;
+  adminPassword: string;
+  confirm: true;
+}): Promise<LocalDatabaseResponse> {
+  return request("/api/v1/local/database/initialize", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function migrateLocalDatabase(): Promise<LocalDatabaseResponse & { applied: string[] }> {
+  return request("/api/v1/local/database/migrate", { method: "POST", body: JSON.stringify({}) });
 }
 
 export async function login(password: string): Promise<AuthSessionResponse> {

@@ -8,6 +8,7 @@ import { AssetDetailPage, AssetFormPage, AssetListPage } from "./pages/AssetsPag
 import { DataSourceDetailPage, DataSourceFormPage, DataSourceListPage } from "./pages/DataSourcesPage";
 import { EventDetailPage, EventsListPage } from "./pages/EventsPage";
 import NamespacePage from "./pages/NamespacePage";
+import SettingsPage from "./pages/SettingsPage";
 
 function NotFoundPage() {
   return <main className="page-main"><section className="not-found">
@@ -24,7 +25,7 @@ function NotFoundPage() {
 export default function App() {
   const [session, setSession] = useState<
     | { kind: "loading" }
-    | { kind: "ready"; configured: boolean; authenticated: boolean }
+    | { kind: "ready"; configured: boolean; authenticated: boolean; localMode: boolean }
     | { kind: "unavailable"; message: string }
   >({ kind: "loading" });
 
@@ -32,7 +33,12 @@ export default function App() {
     setSession({ kind: "loading" });
     try {
       const response = await getAuthSession();
-      setSession({ kind: "ready", configured: response.configured, authenticated: response.authenticated });
+      setSession({
+        kind: "ready",
+        configured: response.configured,
+        authenticated: response.authenticated,
+        localMode: response.localMode === true,
+      });
     } catch (error) {
       setSession({
         kind: "unavailable",
@@ -45,7 +51,7 @@ export default function App() {
     void checkSession();
     const onExpired = () => {
       setCsrfToken(null);
-      setSession({ kind: "ready", configured: true, authenticated: false });
+      setSession({ kind: "ready", configured: true, authenticated: false, localMode: false });
     };
     window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
@@ -54,13 +60,13 @@ export default function App() {
   const handleLogin = async (password: string) => {
     const response = await login(password);
     if (!response.authenticated) throw new Error("Sign in was not completed.");
-    setSession({ kind: "ready", configured: true, authenticated: true });
+    setSession({ kind: "ready", configured: true, authenticated: true, localMode: false });
   };
 
   const handleLogout = async () => {
     try {
       await logout();
-      setSession({ kind: "ready", configured: true, authenticated: false });
+      setSession({ kind: "ready", configured: true, authenticated: false, localMode: false });
     } catch {
       setSession({ kind: "unavailable", message: "Sign out could not be confirmed. Reconnect and retry." });
     } finally {
@@ -68,7 +74,8 @@ export default function App() {
     }
   };
 
-  if (session.kind !== "ready" || !session.authenticated) {
+  const localMode = session.kind === "ready" && session.localMode;
+  if (session.kind !== "ready" || (!localMode && !session.authenticated)) {
     return <SignInPage
       configured={session.kind === "ready" ? session.configured : null}
       checking={session.kind === "loading"}
@@ -78,7 +85,7 @@ export default function App() {
     />;
   }
 
-  return <AppShell onLogout={() => void handleLogout()}><Switch>
+  return <AppShell localMode={localMode} onLogout={() => void handleLogout()}><Switch>
     <Route path="/" component={HomePage} />
     <Route path="/namespace" component={NamespacePage} />
     <Route path="/assets" component={AssetListPage} />
@@ -91,6 +98,7 @@ export default function App() {
     <Route path="/data-sources/:id"><DataSourceDetailPage /></Route>
     <Route path="/events" component={EventsListPage} />
     <Route path="/events/:id" component={EventDetailPage} />
+    {localMode && <Route path="/settings" component={SettingsPage} />}
     <Route><NotFoundPage /></Route>
   </Switch></AppShell>;
 }

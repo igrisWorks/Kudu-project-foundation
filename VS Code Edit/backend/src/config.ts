@@ -1,32 +1,45 @@
 import { AuthManager, type AuthConfiguration } from "./auth.js";
 
 export interface AppConfig {
-  databaseUrl: string;
+  databaseUrl?: string;
   host: string;
   port: number;
   logLevel: string;
   auth: AuthConfiguration;
+  localMode: boolean;
 }
 
 const allowedLogLevels = new Set(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
 
 export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
+  const rawLocalMode = environment.KUDU_LOCAL_MODE?.trim().toLowerCase();
+  if (rawLocalMode && rawLocalMode !== "true" && rawLocalMode !== "false") {
+    throw new Error("KUDU_LOCAL_MODE must be true or false.");
+  }
+  const localMode = rawLocalMode === "true";
+  const isProduction = environment.NODE_ENV?.trim().toLowerCase() === "production";
+  if (localMode && isProduction) {
+    throw new Error("KUDU_LOCAL_MODE is only available outside production.");
+  }
+
   const databaseUrl = environment.DATABASE_URL?.trim();
-  if (!databaseUrl) {
+  if (!databaseUrl && !localMode) {
     throw new Error("DATABASE_URL is required. Copy .env.example to .env and configure it.");
   }
 
-  let parsedDatabaseUrl: URL;
-  try {
-    parsedDatabaseUrl = new URL(databaseUrl);
-  } catch {
-    throw new Error("DATABASE_URL must be a valid PostgreSQL connection URL.");
-  }
-  if (parsedDatabaseUrl.protocol !== "postgres:" && parsedDatabaseUrl.protocol !== "postgresql:") {
-    throw new Error("DATABASE_URL must use the postgres: or postgresql: protocol.");
-  }
-  if (!parsedDatabaseUrl.hostname || parsedDatabaseUrl.pathname.length < 2) {
-    throw new Error("DATABASE_URL must include a database host and database name.");
+  if (databaseUrl) {
+    let parsedDatabaseUrl: URL;
+    try {
+      parsedDatabaseUrl = new URL(databaseUrl);
+    } catch {
+      throw new Error("DATABASE_URL must be a valid PostgreSQL connection URL.");
+    }
+    if (parsedDatabaseUrl.protocol !== "postgres:" && parsedDatabaseUrl.protocol !== "postgresql:") {
+      throw new Error("DATABASE_URL must use the postgres: or postgresql: protocol.");
+    }
+    if (!parsedDatabaseUrl.hostname || parsedDatabaseUrl.pathname.length < 2) {
+      throw new Error("DATABASE_URL must include a database host and database name.");
+    }
   }
 
   const rawPort = environment.PORT ?? "3000";
@@ -48,7 +61,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     sessionSecret: environment.SESSION_SECRET?.trim() || undefined,
     cookieSecure: rawCookieSecure !== "false",
   };
-  if (environment.NODE_ENV?.trim().toLowerCase() === "production") {
+  const host = environment.HOST?.trim() || "127.0.0.1";
+  if (localMode && !["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase())) {
+    throw new Error("KUDU_LOCAL_MODE requires HOST to be loopback (127.0.0.1, ::1, or localhost).");
+  }
+
+  if (isProduction) {
     if (!new AuthManager(auth).configured) {
       throw new Error(
         "Production requires a valid KUDU_AUTH_PASSWORD_HASH and a SESSION_SECRET of at least 32 bytes.",
@@ -62,10 +80,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
   }
 
   return {
-    databaseUrl,
-    host: environment.HOST?.trim() || "127.0.0.1",
+    ...(databaseUrl ? { databaseUrl } : {}),
+    host,
     port,
     logLevel,
     auth,
+    localMode,
   };
 }

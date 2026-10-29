@@ -266,6 +266,24 @@ tbody tr:hover { background: #f8fafc; }
 .namespace-event-topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .namespace-event-source, .namespace-event-record { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 7px; margin-top: 8px; font-size: 10px; line-height: 1.45; }
 .namespace-page .loading-state, .namespace-page .empty-state, .namespace-page .error-state { min-height: 180px; }
+.settings-panel { max-width: 880px; }
+.settings-panel > .panel-heading { padding: 17px 20px; }
+.settings-panel > .panel-heading h2 { margin: 0; }
+.settings-panel .form-panel { border: 0; border-radius: 0; }
+.settings-panel > .notice { margin: 14px 20px 0; }
+.settings-form { padding: 22px 20px; }
+.settings-state { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 15px 0; margin-top: 20px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.settings-state > div { min-width: 0; display: grid; gap: 5px; }
+.settings-state strong { color: var(--navy); font-size: 12px; font-weight: 600; }
+.settings-state .field-hint { overflow-wrap: anywhere; }
+.settings-form .form-actions { align-items: center; }
+.settings-success { border-color: #4d9778; background: #eff8f3; color: #28694f; }
+.settings-security-note { max-width: 880px; margin: 15px 0; color: #69788b; font-size: 11px; line-height: 1.6; }
+.settings-provisioning { max-width: 880px; padding: 16px 20px 20px; border-top: 1px solid var(--line); background: #fbfcfd; }
+.settings-provisioning summary { color: #354a66; font-size: 11px; font-weight: 600; cursor: pointer; }
+.settings-provisioning > p { max-width: 690px; margin: 12px 0 16px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.settings-provisioning .form-grid { margin-bottom: 14px; }
+.settings-confirm { margin: 13px 0; }
 @media (max-width: 920px) {
   .app-shell { grid-template-columns: 205px minmax(0, 1fr); }
   .nav-rail { padding-right: 12px; padding-left: 12px; }
@@ -274,6 +292,7 @@ tbody tr:hover { background: #f8fafc; }
   .event-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .event-time-hint, .event-filter-actions { grid-column: 1 / -1; }
   .namespace-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-form .form-actions { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 680px) {
   .app-shell { display: flex; flex-direction: column; }
@@ -308,6 +327,7 @@ tbody tr:hover { background: #f8fafc; }
   .mapping-panel .panel-heading-row { align-items: flex-start; }
   .namespace-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .namespace-search { grid-column: 1 / -1; }
+  .settings-state { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 480px) {
   .workspace-content { padding: 0 13px; }

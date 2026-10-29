@@ -14,6 +14,8 @@ import { registerRegistryRoutes } from "./registry.js";
 import { registerRestSyncRoutes } from "./rest-sync.js";
 import type { Kysely } from "kysely";
 import { AuthManager, registerAuthenticationGuard, registerAuthRoutes, type AuthConfiguration } from "./auth.js";
+import { registerLocalDatabaseRoutes } from "./local-database-routes.js";
+import type { LocalDatabaseManager } from "./local-database.js";
 
 interface AppOptions {
   db: Kysely<Database>;
@@ -24,6 +26,8 @@ interface AppOptions {
   allowLoopbackRestTests?: boolean;
   databaseCheck?: (db: Kysely<Database>) => Promise<void>;
   auth?: AuthConfiguration;
+  localMode?: boolean;
+  localDatabase?: LocalDatabaseManager;
 }
 
 export async function createApp(options: AppOptions): Promise<FastifyInstance> {
@@ -36,6 +40,8 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
           "req.headers.authorization",
           "req.headers['x-kudu-csrf']",
           "req.body.password",
+          "req.body.database.password",
+          "req.body.adminPassword",
           "res.headers['set-cookie']",
         ],
         censor: "[REDACTED]",
@@ -139,8 +145,11 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     sessionSecret: process.env.SESSION_SECRET,
     cookieSecure: process.env.KUDU_COOKIE_SECURE?.trim().toLowerCase() !== "false",
   });
-  registerAuthenticationGuard(app, auth);
-  registerAuthRoutes(app, auth);
+  registerAuthenticationGuard(app, auth, { localMode: options.localMode });
+  registerAuthRoutes(app, auth, { localMode: options.localMode });
+  if (options.localMode && options.localDatabase) {
+    registerLocalDatabaseRoutes(app, options.localDatabase);
+  }
   registerRegistryRoutes(app, options.db);
   registerEventRoutes(app, options.db);
   registerEventMappingRoutes(app, options.db);

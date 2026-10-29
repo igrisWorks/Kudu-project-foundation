@@ -4,15 +4,52 @@
 
 - Node.js 24 LTS.
 - Corepack and pnpm 10.26.1 (`corepack enable`).
-- PostgreSQL 18 installed locally for the no-Docker workflow, including `psql` (and optionally `pg_isready`) on `PATH` or under `C:\Program Files\PostgreSQL\<version>\bin`.
+- PostgreSQL 18 installed locally for database-backed use. The Local Web Edition can start without PostgreSQL so its Settings page remains available.
 - Docker Engine with the Docker Compose plugin is optional for local development.
 - Visual Studio Code is recommended but not required.
 
-The environment variables are listed in `.env.example`. Never commit `.env`; use private environment configuration for real deployments.
+The secure-edition environment variables are listed in `.env.example`. Never commit `.env`; use private environment configuration for real deployments.
 
-## Windows local development without Docker
+## Local Web Edition
 
-From the project root, run:
+The default `pnpm dev` command starts a local-only edition without operator sign-in. It needs no password hash, session secret, or `.env` file. It binds to `127.0.0.1`; the backend refuses local mode in production or on a non-loopback bind. Do not expose this edition to a network.
+
+### Windows setup and startup
+
+Install Node.js 24, PostgreSQL 18, and Corepack. PostgreSQL is optional for opening the UI but required for persisted data. From PowerShell at the project root:
+
+```powershell
+corepack enable
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Open `http://127.0.0.1:5173`. The launcher validates Node/pnpm versions, checks ports 3000 and 5173, prevents duplicate runs, and checks local PostgreSQL TCP reachability. On Windows, if it finds exactly one stopped service named `postgresql-x64-<version>`, it attempts `sc.exe start` for that service. If Windows denies permission, start it from Windows Services or run the command in an authorized PowerShell. It does not install PostgreSQL or alter service settings, and it does not start an ambiguous service. On Linux/macOS, start PostgreSQL manually.
+
+If PostgreSQL is unavailable, Kudu starts in disconnected mode and shows the state on the dashboard and **Settings → Database**. The UI rechecks periodically, and only a real SQL query marks the database connected.
+
+In **Settings → Database**, enter the loopback host (`127.0.0.1`, `::1`, or `localhost`), port, database, application username, and password if required. **Test connection** does not save. **Save connection** verifies the role, applies pending forward-only migrations, and switches the app to the connection. It never deletes or resets data.
+
+To create missing PostgreSQL objects, expand **Initialize a missing database or application role**, enter administrator credentials, and authorize the operation. Kudu creates only the missing role/database. It does not alter an existing role password, and the administrator password is used only for that request. New roles require an application password of at least 12 UTF-8 bytes. If initialization partially succeeds and a later step fails, retry with the same names; the existing objects are preserved.
+
+Database credentials stay in the backend. Windows saves them encrypted with DPAPI CurrentUser and a restricted ACL. Other operating systems use an owner-only JSON settings file (`0600`). This local-machine storage is not a managed secret vault; protect the operating-system account and disk. The file `.kudu-local-database.json` is ignored by Git, never returned through an API, and not stored in browser storage.
+
+The launcher builds shared contracts, starts the backend and Vite, prints `http://127.0.0.1:5173`, and stops child processes on Ctrl+C. Use `pnpm dev -- --no-browser` or `KUDU_OPEN_BROWSER=0 pnpm dev` to suppress browser launch.
+
+### Authenticated development edition
+
+The secure edition remains available explicitly as `pnpm dev:secure`:
+
+```powershell
+Copy-Item .env.example .env
+pnpm install --frozen-lockfile
+pnpm --filter @kudu/backend auth:hash-password
+# Put the generated hash and a random SESSION_SECRET in .env.
+pnpm db:migrate
+pnpm dev:secure
+```
+
+Its Windows setup helper remains available:
 
 ```powershell
 .\scripts\kuduns.ps1 -Setup
@@ -21,34 +58,7 @@ From the project root, run:
 .\scripts\kuduns.ps1
 ```
 
-From another directory, invoke the same script by its full path. It resolves the project root from its own location.
-
-Use PowerShell 5.1 or later. The script checks the Node.js engine range and exact pnpm version in `package.json`, locates PostgreSQL command-line tools on `PATH` or in versioned PostgreSQL installation folders, and uses the existing frozen lockfile and migration commands. It never starts Docker.
-
-On first setup, the script asks for local PostgreSQL connection details and a hidden application-role password. It first attempts a normal connection. If the database or role is missing, it asks separately before connecting as a PostgreSQL administrator; it creates only missing objects, never changes an existing role password, and will not create a role over an existing database. PostgreSQL administrator passwords and Kudu operator passwords are entered without echo. New local roles receive a password through psql's hidden `\password` prompt. If setup is interrupted after creating a role/database but before finishing credentials, rerun setup with the same names; existing objects will not be dropped or reset. If the new role has no working password yet, set it manually with an administrator's psql `\password` prompt before rerunning setup.
-
-The script copies `.env.example` only when `.env` does not exist. It never overwrites an existing `.env`; an existing file must already contain a valid `DATABASE_URL`, `KUDU_AUTH_PASSWORD_HASH`, and `SESSION_SECRET`. Edit missing values yourself, then rerun setup. Credentials in `DATABASE_URL` are URL-encoded by the setup script, so reserved characters in the database username or password are supported. The password hash is generated by the existing `pnpm --filter @kudu/backend auth:hash-password` command and captured without echoing the hash. A cryptographically random session secret is generated only for a newly created `.env`. Local setup sets `HOST=127.0.0.1` and `KUDU_COOKIE_SECURE=false`, which is appropriate only for isolated loopback HTTP. Production continues to require HTTPS and Secure cookies.
-
-After verifying the database, setup asks before running the existing forward-only migration command. Review pending migration SQL before approving: migrations may change the schema or records, but the setup workflow never drops, resets, or recreates the database. The local PostgreSQL service must already be installed and running; the script does not change Windows services or administrator passwords. It creates the configured import directory if needed.
-
-Daily startup verifies the `.env`, credentials, and database connection, checks ports 3000 and 5173 before starting, then runs the existing `pnpm dev` workflow with output visible. It opens the browser after the frontend responds; use `.\scripts\kuduns.ps1 -NoBrowser` to suppress that. Press Ctrl+C to stop the development process tree. `-Check` performs non-mutating version, configuration, PostgreSQL, and port checks. `-SelfTest` exercises the script's version, dotenv, and reserved-character URL helpers without requiring PostgreSQL or changing workspace files.
-
-If a port is occupied, the script names its owner where Windows exposes it; stop that process before starting Kudu again. If PostgreSQL cannot be reached, start the installed PostgreSQL service from Windows Services and confirm the host/port and role credentials. The health endpoints are `http://127.0.0.1:3000/healthz` (process liveness) and `http://127.0.0.1:3000/api/v1/health` (database readiness). Keep the app bound to loopback; do not expose this HTTP development server to a public network.
-
-To update safely, back up the local database first, update the source tree, then run `.\scripts\kuduns.ps1 -Setup` to install the frozen dependencies and apply pending forward-only migrations. Review migration output before daily startup. Never delete the database or volume as an update step. The project `.gitignore` already excludes `.env`, `.env.*` (except `.env.example`), and `imports/`.
-
-## First run
-
-For macOS/Linux local PostgreSQL development, from this directory:
-
-```sh
-cp .env.example .env
-pnpm install --frozen-lockfile
-pnpm db:migrate
-pnpm dev
-```
-
-`pnpm dev` starts the API and Vite frontend. Vite serves `http://localhost:5173` and proxies API calls to `http://localhost:3000`. The status panel reads the live health endpoint; registry pages read and write persisted API records, not demonstration data.
+The helper provisions the authenticated edition, so it asks for operator authentication configuration. It is not required for the Local Web Edition.
 
 The authenticated UI requires `KUDU_AUTH_PASSWORD_HASH` and `SESSION_SECRET`. Generate the hash interactively with `pnpm --filter @kudu/backend auth:hash-password`, then set both values in `.env` or the workspace Secrets panel. Do not commit either value. The example environment file intentionally leaves them blank; without them, private API routes fail closed while health probes continue to work.
 

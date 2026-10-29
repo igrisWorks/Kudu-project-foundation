@@ -1,7 +1,15 @@
 import type { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 
-export default function AppShell({ children, onLogout }: { children: ReactNode; onLogout: () => void }) {
+export default function AppShell({
+  children,
+  onLogout,
+  localMode = false,
+}: {
+  children: ReactNode;
+  onLogout: () => void;
+  localMode?: boolean;
+}) {
   const [location] = useLocation();
   return <div className="app-shell">
     <aside className="nav-rail">
@@ -16,14 +24,15 @@ export default function AppShell({ children, onLogout }: { children: ReactNode; 
         <Link href="/data-sources" aria-current={location.startsWith("/data-sources") ? "page" : undefined} data-testid="nav-data-sources"><span className="nav-glyph" aria-hidden="true">03</span>Data sources</Link>
         <Link href="/events" aria-current={location.startsWith("/events") ? "page" : undefined} data-testid="nav-events"><span className="nav-glyph" aria-hidden="true">04</span>Events</Link>
         <Link href="/namespace" aria-current={location === "/namespace" ? "page" : undefined} data-testid="nav-namespace"><span className="nav-glyph" aria-hidden="true">05</span>Unified Namespace</Link>
+        {localMode && <Link href="/settings" aria-current={location === "/settings" ? "page" : undefined} data-testid="nav-settings"><span className="nav-glyph" aria-hidden="true">06</span>Settings</Link>}
       </nav>
       <div className="rail-bottom">
-        <div className="environment"><span className="environment-dot" /> PRIVATE REGISTRY</div>
-        <button className="signout-button" type="button" onClick={onLogout} data-testid="button-sign-out">Sign out</button>
+        <div className="environment"><span className="environment-dot" /> {localMode ? "LOCAL · NO LOGIN" : "PRIVATE REGISTRY"}</div>
+        {!localMode && <button className="signout-button" type="button" onClick={onLogout} data-testid="button-sign-out">Sign out</button>}
       </div>
     </aside>
     <div className="workspace">
-      <header className="workspace-bar"><span>OPERATIONS REGISTRY</span><span className="workspace-status">ON-PREMISES</span></header>
+      <header className="workspace-bar"><span>OPERATIONS REGISTRY</span><span className="workspace-status">{localMode ? "LOCAL WEB EDITION" : "ON-PREMISES"}</span></header>
       <div className="workspace-content">{children}</div>
       <footer className="footer"><span>KUDUNS · INDUSTRIAL DATA</span><span>PRIVATE INFRASTRUCTURE</span></footer>
     </div>

@@ -6,15 +6,17 @@ Kudu is an on-premises industrial data platform foundation. This directory is th
 
 Prerequisites: Node.js 24 LTS and pnpm 10.26.1 via Corepack. For local development, use PostgreSQL 18 installed locally (Docker is optional). For production deployment, use Docker Compose as described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-On Windows, a guided no-Docker setup and launcher is available:
+The default `pnpm dev` command runs the explicit, loopback-only Local Web Edition without operator sign-in. It does not need `KUDU_AUTH_PASSWORD_HASH` or `SESSION_SECRET`:
 
 ```powershell
-.\scripts\kuduns.ps1 -Setup
-.\scripts\kuduns.ps1 -Check
-.\scripts\kuduns.ps1
+corepack enable
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#windows-local-development-without-docker) for PostgreSQL setup, credentials, troubleshooting, and safe updates.
+Open <http://127.0.0.1:5173>. Configure or provision a local PostgreSQL connection at **Settings → Database**. The launcher checks Node/pnpm versions, local database reachability, ports, and duplicate instances; on Windows it attempts to start one matching stopped PostgreSQL service when permitted. Use `pnpm dev -- --no-browser` to suppress the browser. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#local-web-edition) for exact setup steps, credential storage, OS limitations, and troubleshooting.
+
+The original authenticated development edition remains available explicitly as `pnpm dev:secure`. On Windows, `.\scripts\kuduns.ps1 -Setup` is the guided secure-edition setup.
 
 ```sh
 corepack enable
@@ -24,12 +26,12 @@ pnpm --filter @kudu/backend auth:hash-password
 # Set the generated hash and a random SESSION_SECRET in .env.
 pnpm install --frozen-lockfile
 pnpm db:migrate
-pnpm dev
+pnpm dev:secure
 ```
 
-Open the frontend at <http://localhost:5173>. The API listens at <http://localhost:3000>; health checks remain available at `GET /healthz` and `GET /api/v1/health`. Asset and data-source registry routes are documented in [docs/API.md](docs/API.md) and [docs/openapi.yaml](docs/openapi.yaml).
+The authenticated frontend is at <http://127.0.0.1:5173>; the API listens at <http://127.0.0.1:3000>. Health checks remain available at `GET /healthz` and `GET /api/v1/health`. Asset and data-source registry routes are documented in [docs/API.md](docs/API.md) and [docs/openapi.yaml](docs/openapi.yaml).
 
-The password hash contains `$`; quote its value with single quotes in `.env`. For isolated loopback HTTP development only, set `KUDU_COOKIE_SECURE=false` if the browser does not accept Secure cookies.
+The password hash contains `$`; quote its value with single quotes in `.env`. For isolated loopback HTTP secure-edition development only, set `KUDU_COOKIE_SECURE=false` if the browser does not accept Secure cookies. `KUDU_LOCAL_MODE` is set automatically by `pnpm dev` and is never accepted in production or with a non-loopback host.
 
 For production, use the Docker Compose procedure in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). It builds the versioned production image, waits for PostgreSQL, applies migrations once, and starts the app only after migration succeeds. The same guide covers backup/restore and transferring images to offline hosts.
 
@@ -55,4 +57,4 @@ The Linux desktop shell and its current connection-mode limitations are document
 - [Data model](docs/DATA_MODEL.md)
 - [Changelog](docs/CHANGELOG.md)
 
-The MVP includes persistent asset and data-source registries, event ingestion, mapped file import, read-only REST sync, and single-operator authentication. It does not include PLC control, per-user roles, or multi-user account management. Registry, event, import, mapping, and sync API routes require the configured operator session and CSRF token; keep the application bound to loopback and use TLS for remote access.
+The MVP includes persistent asset and data-source registries, event ingestion, mapped file import, read-only REST sync, a local no-login development edition, and the original single-operator authenticated edition. It does not include PLC control, per-user roles, or multi-user account management. The secure edition's registry, event, import, mapping, and sync API routes require the configured operator session and CSRF token; keep remote access behind HTTPS.

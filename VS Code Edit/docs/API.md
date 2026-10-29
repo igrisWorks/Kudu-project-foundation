@@ -40,6 +40,22 @@ The login response does not include the session or CSRF token in JSON. The sessi
 
 When `KUDU_AUTH_PASSWORD_HASH` or a valid `SESSION_SECRET` is missing, private API routes fail closed with `503 AUTH_NOT_CONFIGURED`; health checks remain available. Invalid login attempts are rate-limited to 5 per source IP and 30 globally per 15-minute window, with at most two concurrent password checks. Configure the hash and session secret as protected environment values; never commit them or place the password in a command-line argument.
 
+### Local Web Edition only
+
+When `KUDU_LOCAL_MODE=true` is explicitly set outside production and the backend binds to loopback, the session endpoint reports `{ "configured": true, "authenticated": true, "localMode": true }`; the ordinary dashboard does not require operator sign-in. This mode is not a supported remote-access configuration. API requests are restricted to loopback peers/Host values, and state-changing requests must carry a same-local-origin browser `Origin`.
+
+The local database settings API is registered only in this mode:
+
+| Method | Route | Behavior |
+|---|---|---|
+| `GET` | `/api/v1/local/database` | Return sanitized connection metadata and current connection/migration status. No password is returned. |
+| `POST` | `/api/v1/local/database/test` | Verify the submitted loopback PostgreSQL connection without saving or migrating. |
+| `POST` | `/api/v1/local/database/save` | Verify credentials and least-privilege role, apply forward migrations, securely persist settings, and switch the live pool. |
+| `POST` | `/api/v1/local/database/initialize` | With explicit confirmation, create only a missing database and/or role using a one-request administrator credential. Existing role passwords and database contents are not reset. |
+| `POST` | `/api/v1/local/database/migrate` | Apply pending forward-only migrations to the active connection. |
+
+These routes are intentionally absent in the authenticated edition. Password fields are redacted from server request logs, use backend-side persistence, and are excluded from API responses.
+
 ## Registry routes
 
 All registry routes are under `/api/v1`. List responses use `{ "items": [], "total": 0, "page": 1, "pageSize": 25 }`; page numbers start at 1 and `pageSize` is limited to 1–100. Search is case-insensitive and limited to 120 characters. Results have stable key/name and ID ordering.

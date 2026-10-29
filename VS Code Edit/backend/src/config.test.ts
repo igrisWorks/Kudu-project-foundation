@@ -16,6 +16,7 @@ test("loads a valid PostgreSQL URL and applies local defaults", () => {
         sessionSecret: undefined,
         cookieSecure: true,
       },
+      localMode: false,
     },
   );
 });
@@ -77,4 +78,33 @@ test("requires valid authentication and secure cookies in production", () => {
     /KUDU_COOKIE_SECURE must be true in production/,
   );
   assert.equal(loadConfig(productionConfig).auth.cookieSecure, true);
+});
+
+test("local mode does not require database or operator authentication configuration", () => {
+  assert.deepEqual(loadConfig({ KUDU_LOCAL_MODE: "true" }), {
+    host: "127.0.0.1",
+    port: 3000,
+    logLevel: "info",
+    auth: {
+      passwordHash: undefined,
+      sessionSecret: undefined,
+      cookieSecure: true,
+    },
+    localMode: true,
+  });
+});
+
+test("local no-login mode fails closed in production and on non-loopback binds", () => {
+  assert.throws(
+    () => loadConfig({ KUDU_LOCAL_MODE: "true", NODE_ENV: "production" }),
+    /only available outside production/,
+  );
+  assert.throws(
+    () => loadConfig({ KUDU_LOCAL_MODE: "true", HOST: "0.0.0.0" }),
+    /requires HOST to be loopback/,
+  );
+  assert.throws(
+    () => loadConfig({ KUDU_LOCAL_MODE: "yes" }),
+    /KUDU_LOCAL_MODE must be true or false/,
+  );
 });

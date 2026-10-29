@@ -285,10 +285,55 @@ export class AuthManager {
   }
 }
 
-export function registerAuthenticationGuard(app: FastifyInstance, auth: AuthManager): void {
+function isLoopback(value: string): boolean {
+  const host = value.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host.startsWith("::ffff:")) return isLoopback(host.slice("::ffff:".length));
+  return host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
+function sameLocalOrigin(originHeader: string | undefined, requestHost: string): boolean {
+  if (!originHeader) return false;
+  try {
+    const origin = new URL(originHeader);
+    const host = new URL(`http://${requestHost}`);
+    if (origin.protocol !== "http:" || !isLoopback(origin.hostname) || !isLoopback(host.hostname)) return false;
+    const configuredApiPort = process.env.PORT?.trim() || "3000";
+    if (origin.hostname.toLowerCase() !== host.hostname.toLowerCase() &&
+        !isLoopback(origin.hostname)) return false;
+    if (origin.port === host.port) return true;
+    return host.port === configuredApiPort && origin.port === "5173";
+  } catch {
+    return false;
+  }
+}
+
+export function registerAuthenticationGuard(
+  app: FastifyInstance,
+  auth: AuthManager,
+  options: { localMode?: boolean } = {},
+): void {
   app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] ?? request.url;
     if (path !== "/api/v1" && !path.startsWith("/api/v1/")) return;
+    if (options.localMode) {
+      const remoteAddress = request.socket.remoteAddress ?? "";
+      const hostHeader = request.headers.host ?? "";
+      let requestHostname = "";
+      try {
+        requestHostname = new URL(`http://${hostHeader}`).hostname;
+      } catch {
+        return reply.code(403).send(errorResponse("LOCAL_ONLY", "This local service accepts loopback requests only."));
+      }
+      if (!isLoopback(remoteAddress) || !isLoopback(requestHostname)) {
+        return reply.code(403).send(errorResponse("LOCAL_ONLY", "This local service accepts loopback requests only."));
+      }
+      if (!["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) {
+        if (request.headers["sec-fetch-site"] === "cross-site" || !sameLocalOrigin(request.headers.origin, hostHeader)) {
+          return reply.code(403).send(errorResponse("LOCAL_ORIGIN_REQUIRED", "This request must come from the local Kudu page."));
+        }
+      }
+      return;
+    }
     const method = request.method.toUpperCase();
     if (
       (path === "/api/v1/health" && (method === "GET" || method === "HEAD")) ||
@@ -317,9 +362,16 @@ export function registerAuthenticationGuard(app: FastifyInstance, auth: AuthMana
   });
 }
 
-export function registerAuthRoutes(app: FastifyInstance, auth: AuthManager): void {
+export function registerAuthRoutes(
+  app: FastifyInstance,
+  auth: AuthManager,
+  options: { localMode?: boolean } = {},
+): void {
   app.get("/api/v1/auth/session", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
+    if (options.localMode) {
+      return { configured: true, authenticated: true, localMode: true };
+    }
     const session = auth.getSession(request.headers.cookie);
     if (session) reply.header("Set-Cookie", auth.setCsrfCookie(session.csrfToken));
     return {

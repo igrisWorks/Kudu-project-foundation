@@ -8,7 +8,8 @@
     "pnpm": "10.26.1"
   },
   "scripts": {
-    "dev": "pnpm --filter @kudu/shared build && pnpm --parallel --stream --filter @kudu/backend --filter @kudu/frontend dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:secure": "pnpm --filter @kudu/shared build && pnpm --parallel --stream --filter @kudu/backend --filter @kudu/frontend dev",
     "build": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/frontend build && pnpm --filter @kudu/backend build",
     "typecheck": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/shared typecheck && pnpm --filter @kudu/backend typecheck && pnpm --filter @kudu/frontend typecheck",
     "test": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/backend test",
