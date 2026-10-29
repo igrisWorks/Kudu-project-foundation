@@ -94,3 +94,12 @@ test("authentication failures are redacted in database diagnostics", () => {
   assert.match(message, /rejected these credentials/);
   assert.equal(message.includes("private-value"), false);
 });
+
+test("PostgreSQL and Linux settings-storage errors expose safe actionable codes", () => {
+  assert.match(safeLocalDatabaseError(Object.assign(new Error("database operation failed"), {
+    code: "XX000",
+  })), /error XX000/);
+  assert.match(safeLocalDatabaseError(Object.assign(new Error("permission denied"), {
+    code: "EACCES",
+  })), /settings file/);
+});

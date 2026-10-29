@@ -152,8 +152,14 @@ export function safeLocalDatabaseError(error: unknown): string {
   if (code === "3D000" || /database .* does not exist/i.test(error instanceof Error ? error.message : "")) {
     return "The database does not exist. Create it with your PostgreSQL administrator, then retry.";
   }
+  if (["EACCES", "EPERM", "EROFS", "ENOSPC"].includes(code)) {
+    return "Kudu cannot write its protected settings file. Check the settings volume ownership and free space.";
+  }
   if (code === "42501" || /permission denied/i.test(error instanceof Error ? error.message : "")) {
     return "The database role lacks required permissions. Grant the dedicated Kudu role access and retry.";
+  }
+  if (/^[0-9A-Z]{5}$/.test(code)) {
+    return `PostgreSQL reported error ${code}. Check database permissions and migration status.`;
   }
   return "PostgreSQL connection or migration failed. Check the local service, role permissions, and migration status.";
 }
