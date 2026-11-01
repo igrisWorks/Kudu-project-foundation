@@ -55,6 +55,7 @@ test("disposable PostgreSQL provisions a least-privilege role and applies migrat
       database: databaseName,
       username: applicationRole,
       password: applicationPassword,
+      ssl: false,
     };
     manager = await LocalDatabaseManager.create(undefined, { allowRemoteHosts: true });
     provisioningAttempted = true;

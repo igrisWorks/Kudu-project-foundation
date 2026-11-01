@@ -13,12 +13,14 @@ test("local database settings accept loopback addresses and reject remote or mal
     database: "kudu",
     username: "kudu_app",
     password: "",
+    ssl: false,
   }), {
     host: "127.0.0.1",
     port: 5432,
     database: "kudu",
     username: "kudu_app",
     password: "",
+    ssl: false,
   });
   assert.throws(() => validateLocalDatabaseSettings({
     host: "db.example.test",
@@ -82,7 +84,23 @@ test("database URL parsing decodes credentials without exposing them in returned
     database: "kudu",
     username: "kudu_user",
     password: "p@ss:word",
+    ssl: false,
   });
+});
+
+test("database URL parsing supports verified TLS modes", () => {
+  assert.equal(
+    settingsFromDatabaseUrl("postgresql://kudu_user:secret@localhost:5432/kudu?sslmode=verify-full").ssl,
+    true,
+  );
+  assert.equal(
+    settingsFromDatabaseUrl("postgresql://kudu_user:secret@localhost:5432/kudu?sslmode=disable").ssl,
+    false,
+  );
+  assert.throws(
+    () => settingsFromDatabaseUrl("postgresql://kudu_user:secret@localhost:5432/kudu?sslmode=prefer"),
+    /sslmode must be/,
+  );
 });
 
 test("authentication failures are redacted in database diagnostics", () => {

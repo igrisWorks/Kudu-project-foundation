@@ -9,6 +9,9 @@ dist/
 !.env.example
 coverage/
 *.tsbuildinfo
+*.pem
+*.crt
+*.cer
 .DS_Store
 /imports/
 /.kudu-local-database.json

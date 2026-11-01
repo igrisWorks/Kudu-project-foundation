@@ -11,5 +11,8 @@ imports
 *.tar
 *.tar.gz
 *.sha256
+*.pem
+*.crt
+*.cer
 .kudu-local-database.json
 .kudu-local-database.json.*

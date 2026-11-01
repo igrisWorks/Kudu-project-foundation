@@ -33,7 +33,7 @@ The authenticated frontend is at <http://127.0.0.1:5173>; the API listens at <ht
 
 The password hash contains `$`; quote its value with single quotes in `.env`. For isolated loopback HTTP secure-edition development only, set `KUDU_COOKIE_SECURE=false` if the browser does not accept Secure cookies. `KUDU_LOCAL_MODE` is set automatically by `pnpm dev` and is never accepted in production or with a non-loopback host.
 
-For production, use the Docker Compose procedure in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). It builds the versioned production image, waits for PostgreSQL, applies migrations once, and starts the app only after migration succeeds. The same guide covers backup/restore and transferring images to offline hosts. For the no-login local edition in Docker, follow [docs/LOCAL-DOCKER.md](docs/LOCAL-DOCKER.md); it uses a separate Compose file and loopback-only published port.
+For production, use the Docker Compose procedure in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). It builds the versioned production image, waits for PostgreSQL, applies migrations once, and starts the app only after migration succeeds. The same guide covers backup/restore and transferring images to offline hosts. For the no-login local edition in Docker, run `pnpm docker:local` and follow [docs/LOCAL-DOCKER.md](docs/LOCAL-DOCKER.md); it uses a separate Compose file, a loopback-only published port, and an optional BuildKit-only CA secret.
 
 ## Desktop shell
 

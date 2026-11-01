@@ -15,6 +15,7 @@ const defaults: LocalDatabaseForm = {
   port: 5432,
   database: "kudu",
   username: "kudu",
+  ssl: false,
 };
 
 export default function SettingsPage({ dockerMode = false }: { dockerMode?: boolean }) {
@@ -40,6 +41,7 @@ export default function SettingsPage({ dockerMode = false }: { dockerMode?: bool
         port: response.settings.port,
         database: response.settings.database,
         username: response.settings.username,
+        ssl: response.settings.ssl,
       }));
       setPasswordConfigured(response.settings.passwordConfigured);
       setDatabase(response.status);
@@ -49,7 +51,7 @@ export default function SettingsPage({ dockerMode = false }: { dockerMode?: bool
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dockerMode]);
 
   useEffect(() => {
     void refresh();
@@ -127,13 +129,13 @@ export default function SettingsPage({ dockerMode = false }: { dockerMode?: bool
       setDatabase(response.status);
       setPasswordConfigured(response.settings.passwordConfigured);
       setSettings(current => ({ ...current, password: "" }));
-      setAdminPassword("");
       setConfirmInitialization(false);
-      setMessage("Missing database objects were created. PostgreSQL was verified and migrations are current.");
+      setMessage("The KuduNS database is ready. PostgreSQL was verified and migrations are current.");
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "The database could not be initialized.");
     } finally {
       setBusy(null);
+      setAdminPassword("");
       void refresh();
     }
   };
@@ -217,6 +219,18 @@ export default function SettingsPage({ dockerMode = false }: { dockerMode?: bool
             />
             <span className="field-hint">Saved only by the backend in a local file restricted to your operating-system account.</span>
           </div>
+          <div className="field span-2">
+            <label className="check-row" htmlFor="db-ssl">
+              <input
+                id="db-ssl"
+                type="checkbox"
+                checked={settings.ssl}
+                onChange={event => setSettings(current => ({ ...current, ssl: event.target.checked }))}
+              />
+              <span>Require TLS and verify the PostgreSQL server certificate</span>
+            </label>
+            <span className="field-hint">Uses trusted operating-system certificates. Kudu never disables certificate verification; custom per-database CA uploads are not supported.</span>
+          </div>
         </div>
 
         <div className="settings-state">
@@ -251,26 +265,26 @@ export default function SettingsPage({ dockerMode = false }: { dockerMode?: bool
       </form>
 
       <details className="settings-provisioning">
-        <summary>Initialize a missing database or application role</summary>
+        <summary>Create KuduNS Database</summary>
         <p>
-          This uses a PostgreSQL administrator only for this action. Kudu creates missing objects, grants the Kudu schema permissions needed by the application role, and removes temporary database-wide create permission after migration. It never changes an existing role password or deletes/resets a database.
+          Kudu will connect to <strong>{settings.host}:{settings.port}</strong> and create <strong>{settings.database}</strong> only if it is missing. It creates the application role only if missing, applies the existing Kudu migrations, and verifies the application connection. Existing databases are never dropped or overwritten, and existing role passwords are not changed. The administrator password is used only for this request and is not saved.
         </p>
         <div className="form-grid">
           <div className="field">
             <label htmlFor="db-admin-user">PostgreSQL administrator username</label>
-            <input id="db-admin-user" value={adminUsername} onChange={event => setAdminUsername(event.target.value)} autoComplete="username" />
+            <input id="db-admin-user" value={adminUsername} onChange={event => setAdminUsername(event.target.value)} autoComplete="username" required />
           </div>
           <div className="field">
             <label htmlFor="db-admin-password">PostgreSQL administrator password</label>
-            <input id="db-admin-password" type="password" value={adminPassword} onChange={event => setAdminPassword(event.target.value)} autoComplete="current-password" />
+            <input id="db-admin-password" type="password" value={adminPassword} onChange={event => setAdminPassword(event.target.value)} autoComplete="current-password" required />
           </div>
         </div>
         <label className="check-row settings-confirm">
           <input type="checkbox" checked={confirmInitialization} onChange={event => setConfirmInitialization(event.target.checked)} />
-          <span>I authorize creating missing objects and applying the required Kudu permissions above.</span>
+          <span>I authorize Kudu to create missing objects for {settings.database} at {settings.host}:{settings.port} and apply the required migrations and permissions.</span>
         </label>
-          <button className="button button-primary" type="button" disabled={busy !== null || !confirmInitialization || !adminUsername} onClick={() => void initializeDatabase()}>
-          {busy === "save" ? "Initializing…" : "Initialize missing objects"}
+        <button className="button button-primary" type="button" disabled={busy !== null || !confirmInitialization || !adminUsername.trim() || !adminPassword} onClick={() => void initializeDatabase()}>
+          {busy === "save" ? "Creating…" : "Create KuduNS Database"}
         </button>
       </details>
     </section>

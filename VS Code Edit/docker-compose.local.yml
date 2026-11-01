@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
       args:
         KUDU_VERSION: ${KUDU_VERSION:-0.1.0}
+      secrets:
+        - corporate-ca
     image: kuduns-local:${KUDU_VERSION:-0.1.0}
     restart: unless-stopped
     init: true
@@ -75,3 +77,7 @@ networks:
   shared-postgres:
     name: ${KUDU_POSTGRES_NETWORK:-kuduns-local-postgres}
     external: ${KUDU_POSTGRES_NETWORK_EXTERNAL:-false}
+
+secrets:
+  corporate-ca:
+    environment: KUDU_DOCKER_CA_CERT

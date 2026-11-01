@@ -33,6 +33,8 @@ services:
       dockerfile: Dockerfile
       args:
         KUDU_VERSION: ${KUDU_VERSION:-0.1.0}
+      secrets:
+        - corporate-ca
     restart: unless-stopped
     init: true
     security_opt:
@@ -72,3 +74,7 @@ services:
 
 volumes:
   kudu-postgres:
+
+secrets:
+  corporate-ca:
+    environment: KUDU_DOCKER_CA_CERT

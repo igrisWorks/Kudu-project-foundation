@@ -32,6 +32,7 @@ export interface LocalDatabaseForm {
   database: string;
   username: string;
   password?: string;
+  ssl: boolean;
 }
 
 export interface LocalDatabaseResponse {
@@ -40,6 +41,7 @@ export interface LocalDatabaseResponse {
     port: number;
     database: string;
     username: string;
+    ssl: boolean;
     passwordConfigured: boolean;
   };
   status: {

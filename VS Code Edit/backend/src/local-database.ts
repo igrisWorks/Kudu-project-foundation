@@ -15,6 +15,7 @@ export interface LocalDatabaseSettings {
   database: string;
   username: string;
   password: string;
+  ssl: boolean;
 }
 
 export interface SafeLocalDatabaseSettings {
@@ -22,6 +23,7 @@ export interface SafeLocalDatabaseSettings {
   port: number;
   database: string;
   username: string;
+  ssl: boolean;
   passwordConfigured: boolean;
 }
 
@@ -60,6 +62,10 @@ export function validateLocalDatabaseSettings(
   const database = typeof input.database === "string" ? input.database.trim() : "";
   const username = typeof input.username === "string" ? input.username.trim() : "";
   const password = typeof input.password === "string" ? input.password : "";
+  if (input.ssl !== undefined && typeof input.ssl !== "boolean") {
+    throw new Error("PostgreSQL TLS setting must be true or false.");
+  }
+  const ssl = input.ssl === true;
   const normalizedHost = host.replace(/^\[|\]$/g, "");
   const validRemoteHost = options.allowRemoteHosts === true && (
     isIP(normalizedHost) !== 0 ||
@@ -87,7 +93,7 @@ export function validateLocalDatabaseSettings(
   if (Buffer.byteLength(password, "utf8") > 1024) {
     throw new Error("Database password is too long.");
   }
-  return { host, port, database, username, password };
+  return { host, port, database, username, password, ssl };
 }
 
 export function settingsFromDatabaseUrl(
@@ -103,12 +109,17 @@ export function settingsFromDatabaseUrl(
   if (!["postgres:", "postgresql:"].includes(url.protocol)) {
     throw new Error("The configured URL must use PostgreSQL.");
   }
+  const sslMode = url.searchParams.get("sslmode")?.toLowerCase();
+  if (sslMode && !["disable", "require", "verify-ca", "verify-full"].includes(sslMode)) {
+    throw new Error("PostgreSQL URL sslmode must be disable, require, verify-ca, or verify-full.");
+  }
   return validateLocalDatabaseSettings({
     host: url.hostname,
     port: url.port ? Number(url.port) : 5432,
     database: decodeURIComponent(url.pathname.replace(/^\/+/, "")),
     username: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
+    ssl: ["require", "verify-ca", "verify-full"].includes(sslMode ?? ""),
   }, options);
 }
 
@@ -131,19 +142,34 @@ function createPool(settings: LocalDatabaseSettings): Pool {
     idleTimeoutMillis: 30_000,
     query_timeout: 8_000,
     statement_timeout: 8_000,
+    ...(settings.ssl ? { ssl: { rejectUnauthorized: true } } : {}),
   });
 }
 
 export function safeLocalDatabaseError(error: unknown): string {
-  if (error instanceof Error && (
-    error.message.startsWith("Kudu application role") ||
-    error.message.startsWith("A new Kudu database role") ||
-    error.message === "Enter a valid PostgreSQL administrator username and password."
-  )) return error.message;
+  const safeMessagePrefixes = [
+    "Kudu application role",
+    "A new Kudu database role",
+    "Enter a valid PostgreSQL administrator username and password.",
+    "PostgreSQL is not reachable at this address and port.",
+    "PostgreSQL rejected these credentials.",
+    "The database does not exist.",
+    "The database role lacks required permissions.",
+    "Kudu cannot write its protected settings file.",
+    "PostgreSQL reported error ",
+    "PostgreSQL connection or migration failed.",
+  ];
+  if (error instanceof Error && safeMessagePrefixes.some(prefix => error.message.startsWith(prefix))) {
+    return error.message;
+  }
   const code = error && typeof error === "object" && "code" in error
     ? String((error as { code: unknown }).code)
     : "";
-  if (code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ENOTFOUND" || code === "EHOSTUNREACH") {
+  if (
+    code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ENOTFOUND" ||
+    code === "EHOSTUNREACH" || code === "ENETUNREACH" || code === "EAI_AGAIN" ||
+    code === "ECONNRESET"
+  ) {
     return "PostgreSQL is not reachable at this address and port. Check that the local service is running.";
   }
   if (code === "28P01" || /password authentication failed/i.test(error instanceof Error ? error.message : "")) {
@@ -308,6 +334,7 @@ function safeSettings(settings: LocalDatabaseSettings | null): SafeLocalDatabase
     port: settings?.port ?? 5432,
     database: settings?.database ?? "kudu",
     username: settings?.username ?? "kudu",
+    ssl: settings?.ssl ?? false,
     passwordConfigured: Boolean(settings?.password),
   };
 }
@@ -397,7 +424,10 @@ export class LocalDatabaseManager {
     let candidate: ActiveDatabase | undefined;
     let temporaryCreateGranted = false;
     let initializationError: unknown;
+    let failedStage: string | undefined;
+    let stage = "connecting to PostgreSQL with administrator credentials";
     try {
+      stage = "checking for existing database and application role";
       const state = await adminPool.query<{ role_exists: boolean; database_exists: boolean }>(
         `SELECT
           EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AS role_exists,
@@ -425,6 +455,7 @@ export class LocalDatabaseManager {
       }
 
       if (!roleExists) {
+        stage = "creating the application role";
         if (Buffer.byteLength(settings.password, "utf8") < 12) {
           throw new Error("A new Kudu database role needs an application password of at least 12 UTF-8 bytes.");
         }
@@ -436,12 +467,14 @@ export class LocalDatabaseManager {
       }
 
       if (!databaseExists) {
+        stage = "creating the KuduNS database";
         const databaseDdl = await adminPool.query<{ statement: string }>(
           "SELECT format('CREATE DATABASE %I OWNER %I', $1::text, $2::text) AS statement",
           [settings.database, adminUsername],
         );
         await adminPool.query(databaseDdl.rows[0]!.statement);
       }
+      stage = "granting temporary database and schema permissions";
       const grantDdl = await adminPool.query<{ statement: string }>(
         "SELECT format('GRANT CONNECT, CREATE ON DATABASE %I TO %I', $1::text, $2::text) AS statement",
         [settings.database, settings.username],
@@ -474,29 +507,43 @@ export class LocalDatabaseManager {
         await targetAdminPool.end();
       }
 
+      stage = "applying migrations and verifying the application role";
       candidate = await this.prepareActive(settings);
     } catch (error) {
       initializationError = error;
+      failedStage = stage;
     } finally {
       if (temporaryCreateGranted) {
         try {
+          stage = "revoking temporary database CREATE permission";
           const revokeDdl = await adminPool.query<{ statement: string }>(
             "SELECT format('REVOKE CREATE ON DATABASE %I FROM %I', $1::text, $2::text) AS statement",
             [settings.database, settings.username],
           );
           await adminPool.query(revokeDdl.rows[0]!.statement);
         } catch (error) {
-          initializationError ??= error;
+          if (!initializationError) {
+            initializationError = error;
+            failedStage = "revoking temporary database CREATE permission";
+          }
         }
       }
       await adminPool.end();
     }
     if (initializationError) {
       await candidate?.db.destroy().catch(() => undefined);
-      throw new Error(safeConnectionError(initializationError));
+      throw new Error(
+        `Database initialization failed while ${failedStage ?? stage}: ${safeConnectionError(initializationError)}`,
+      );
     }
     if (!candidate) throw new Error("PostgreSQL initialization did not produce a verified application connection.");
-    await this.persistAndActivate(settings, candidate);
+    try {
+      await this.persistAndActivate(settings, candidate);
+    } catch (error) {
+      throw new Error(
+        `Database initialization failed while saving protected application settings: ${safeConnectionError(error)}`,
+      );
+    }
   }
 
   async test(settings: LocalDatabaseSettings): Promise<void> {
