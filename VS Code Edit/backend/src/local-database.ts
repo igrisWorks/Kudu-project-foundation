@@ -147,19 +147,22 @@ function createPool(settings: LocalDatabaseSettings): Pool {
 }
 
 export function safeLocalDatabaseError(error: unknown): string {
-  const safeMessagePrefixes = [
-    "Kudu application role",
-    "A new Kudu database role",
+  const safeMessages = new Set([
+    "Kudu application role could not be verified.",
+    "Kudu application role has elevated PostgreSQL privileges. Use a dedicated least-privilege role.",
+    "A new Kudu database role needs an application password of at least 12 UTF-8 bytes.",
     "Enter a valid PostgreSQL administrator username and password.",
-    "PostgreSQL is not reachable at this address and port.",
-    "PostgreSQL rejected these credentials.",
-    "The database does not exist.",
-    "The database role lacks required permissions.",
-    "Kudu cannot write its protected settings file.",
-    "PostgreSQL reported error ",
-    "PostgreSQL connection or migration failed.",
-  ];
-  if (error instanceof Error && safeMessagePrefixes.some(prefix => error.message.startsWith(prefix))) {
+    "PostgreSQL is not reachable at this address and port. Check that the local service is running.",
+    "PostgreSQL rejected these credentials. Check the database username and password.",
+    "The database does not exist. Create it with your PostgreSQL administrator, then retry.",
+    "The database role lacks required permissions. Grant the dedicated Kudu role access and retry.",
+    "Kudu cannot write its protected settings file. Check the settings volume ownership and free space.",
+    "PostgreSQL connection or migration failed. Check the local service, role permissions, and migration status.",
+  ]);
+  if (error instanceof Error && (
+    safeMessages.has(error.message) ||
+    /^PostgreSQL reported error [0-9A-Z]{5}\. Check database permissions and migration status\.$/.test(error.message)
+  )) {
     return error.message;
   }
   const code = error && typeof error === "object" && "code" in error

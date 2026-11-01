@@ -10,7 +10,7 @@ import { LocalDatabaseManager, type LocalDatabaseSettings } from "./local-databa
 const adminUrl = process.env.KUDU_LOCAL_DATABASE_TEST_URL;
 const enabled = Boolean(adminUrl);
 
-test("disposable PostgreSQL provisions a least-privilege role and applies migrations", {
+test("disposable PostgreSQL provisions safely and preserves an existing database on retry", {
   skip: !enabled && "Set KUDU_LOCAL_DATABASE_TEST_URL to a disposable loopback PostgreSQL instance.",
 }, async () => {
   const parsed = new URL(adminUrl!);
@@ -75,6 +75,7 @@ test("disposable PostgreSQL provisions a least-privilege role and applies migrat
       user: applicationRole,
       password: applicationPassword,
     });
+    const markerTable = `provisioning_preservation_${token}`;
     try {
       const privileges = await appPool.query(
         "SELECT r.rolsuper, r.rolcreatedb, r.rolcreaterole, " +
@@ -89,8 +90,32 @@ test("disposable PostgreSQL provisions a least-privilege role and applies migrat
       });
       const migrations = await appPool.query("SELECT count(*)::int AS count FROM kudu.schema_migrations");
       assert.ok(migrations.rows[0].count > 0, "migrations must have run as the application role");
+      await appPool.query(`CREATE TABLE kudu."${markerTable}" (marker text PRIMARY KEY)`);
+      await appPool.query(`INSERT INTO kudu."${markerTable}" (marker) VALUES ('keep-existing-data')`);
     } finally {
       await appPool.end();
+    }
+
+    await manager.close();
+    manager = await LocalDatabaseManager.create(undefined, { allowRemoteHosts: true });
+    await manager.initializeMissingObjects(settings, username, password);
+    const retryStatus = await manager.status();
+    assert.equal(retryStatus.status.connected, true);
+    assert.equal(retryStatus.status.migrationState, "current");
+    assert.equal(retryStatus.settings.passwordConfigured, true);
+
+    const verificationPool = new Pool({
+      host,
+      port: settings.port,
+      database: databaseName,
+      user: applicationRole,
+      password: applicationPassword,
+    });
+    try {
+      const preserved = await verificationPool.query(`SELECT marker FROM kudu."${markerTable}"`);
+      assert.equal(preserved.rows[0]?.marker, "keep-existing-data", "retry must preserve existing database contents");
+    } finally {
+      await verificationPool.end();
     }
   } finally {
     await manager?.close();

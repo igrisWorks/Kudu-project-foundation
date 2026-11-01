@@ -120,4 +120,11 @@ test("PostgreSQL and Linux settings-storage errors expose safe actionable codes"
   assert.match(safeLocalDatabaseError(Object.assign(new Error("permission denied"), {
     code: "EACCES",
   })), /settings file/);
+  assert.match(safeLocalDatabaseError(Object.assign(new Error("temporary DNS lookup failure"), {
+    code: "EAI_AGAIN",
+  })), /not reachable/);
+  assert.equal(
+    safeLocalDatabaseError(new Error("PostgreSQL is not reachable at this address and port. Check that the local service is running.")),
+    "PostgreSQL is not reachable at this address and port. Check that the local service is running.",
+  );
 });
