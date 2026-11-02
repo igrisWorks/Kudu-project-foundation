@@ -12,16 +12,16 @@ if (config.localDocker && (process.platform !== "linux" || !existsSync("/.docker
   throw new Error("KUDU_LOCAL_DOCKER is supported only inside a Docker Linux container.");
 }
 const localDatabase = config.localMode
-  ? await LocalDatabaseManager.create(config.databaseUrl, {
-      allowRemoteHosts: config.localDocker,
-    })
+  ? await LocalDatabaseManager.create()
   : undefined;
 if (localDatabase) await localDatabase.initialize();
 const database = localDatabase
   ? { db: localDatabase.db, close: () => localDatabase.close() }
   : createDatabase(config.databaseUrl!);
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
-const staticDirectory = resolve(currentDirectory, "../../frontend/dist");
+const staticDirectory = resolve(
+  process.env.KUDU_FRONTEND_DIST_DIR ?? resolve(currentDirectory, "../../frontend/dist"),
+);
 const app = await createApp({
   db: database.db,
   staticDirectory,
@@ -48,7 +48,14 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 try {
-  await app.listen({ host: config.host, port: config.port });
+  const address = await app.listen({ host: config.host, port: config.port });
+  if (config.localDesktop) {
+    const actualPort = Number(new URL(address).port);
+    const parentPort = (process as NodeJS.Process & {
+      parentPort?: { postMessage: (message: unknown) => void };
+    }).parentPort;
+    parentPort?.postMessage({ type: "ready", port: actualPort });
+  }
   if (config.localDocker) {
     localDockerProxy = createLocalDockerProxy(config.port);
     await new Promise<void>((resolveListen, rejectListen) => {

@@ -7,10 +7,12 @@ import type {
   JsonObject,
 } from "@kudu/shared";
 import { isDeepStrictEqual } from "node:util";
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "./database.js";
 import { ApiFailure } from "./errors.js";
+import { isSqliteDatabase, lockSqliteWrite } from "./sqlite-database.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const definitionKeys = new Set(["eventType", "occurredAt", "sourceRecordId", "assetKey", "payload"]);
@@ -312,12 +314,14 @@ export function registerEventMappingRoutes(app: FastifyInstance, db: Kysely<Data
     requireUuid(request.params.id);
     const definition = parseDefinitionBody(request.body);
     const row = await db.transaction().execute(async (transaction) => {
-      const source = await transaction
+      await lockSqliteWrite(transaction);
+      const sourceQuery = transaction
         .selectFrom("data_sources")
         .select(["id", "source_type"])
-        .where("id", "=", request.params.id)
-        .forUpdate()
-        .executeTakeFirst();
+        .where("id", "=", request.params.id);
+      const source = isSqliteDatabase(transaction)
+        ? await sourceQuery.executeTakeFirst()
+        : await sourceQuery.forUpdate().executeTakeFirst();
       if (!source) throw new ApiFailure(404, "NOT_FOUND", "Data source not found.");
       if (source.source_type !== "csv_file" && source.source_type !== "json_file" && source.source_type !== "rest_api") {
         throw new ApiFailure(400, "UNSUPPORTED_SOURCE_TYPE", "Event mappings support CSV, JSON, and REST API sources.");
@@ -341,6 +345,7 @@ export function registerEventMappingRoutes(app: FastifyInstance, db: Kysely<Data
       return transaction
         .insertInto("data_source_event_mappings")
         .values({
+          id: randomUUID(),
           source_id: source.id,
           version: (latest?.version ?? 0) + 1,
           status: "draft",
@@ -397,13 +402,15 @@ export function registerEventMappingRoutes(app: FastifyInstance, db: Kysely<Data
       assertNoBody(request.body);
     await requireMappingSource(db, request.params.id);
       const outcome = await db.transaction().execute(async (transaction) => {
-        const row = await transaction
+        await lockSqliteWrite(transaction);
+        const rowQuery = transaction
           .selectFrom("data_source_event_mappings")
           .selectAll()
           .where("source_id", "=", request.params.id)
-          .where("version", "=", version)
-          .forUpdate()
-          .executeTakeFirst();
+          .where("version", "=", version);
+        const row = isSqliteDatabase(transaction)
+          ? await rowQuery.executeTakeFirst()
+          : await rowQuery.forUpdate().executeTakeFirst();
         if (!row) throw new ApiFailure(404, "NOT_FOUND", "Mapping version not found.");
         if (row.status !== "draft") throw notDraft();
         const validation = validateEventMappingDefinition(row.definition);
@@ -435,13 +442,15 @@ export function registerEventMappingRoutes(app: FastifyInstance, db: Kysely<Data
       assertNoBody(request.body);
       await requireMappingSource(db, request.params.id);
       const outcome = await db.transaction().execute(async (transaction) => {
-        const row = await transaction
+        await lockSqliteWrite(transaction);
+        const rowQuery = transaction
           .selectFrom("data_source_event_mappings")
           .selectAll()
           .where("source_id", "=", request.params.id)
-          .where("version", "=", version)
-          .forUpdate()
-          .executeTakeFirst();
+          .where("version", "=", version);
+        const row = isSqliteDatabase(transaction)
+          ? await rowQuery.executeTakeFirst()
+          : await rowQuery.forUpdate().executeTakeFirst();
         if (!row) throw new ApiFailure(404, "NOT_FOUND", "Mapping version not found.");
         if (row.status !== "draft") throw notDraft();
 

@@ -7,6 +7,7 @@ export interface AppConfig {
   logLevel: string;
   auth: AuthConfiguration;
   localMode: boolean;
+  localDesktop: boolean;
   localDocker: boolean;
   localDockerPort: number;
 }
@@ -19,6 +20,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     throw new Error("KUDU_LOCAL_MODE must be true or false.");
   }
   const localMode = rawLocalMode === "true";
+  const rawLocalDesktop = environment.KUDU_LOCAL_DESKTOP?.trim().toLowerCase();
+  if (rawLocalDesktop && rawLocalDesktop !== "true" && rawLocalDesktop !== "false") {
+    throw new Error("KUDU_LOCAL_DESKTOP must be true or false.");
+  }
+  const localDesktop = rawLocalDesktop === "true";
+  if (localDesktop && !localMode) {
+    throw new Error("KUDU_LOCAL_DESKTOP requires KUDU_LOCAL_MODE=true.");
+  }
   const rawLocalDocker = environment.KUDU_LOCAL_DOCKER?.trim().toLowerCase();
   if (rawLocalDocker && rawLocalDocker !== "true" && rawLocalDocker !== "false") {
     throw new Error("KUDU_LOCAL_DOCKER must be true or false.");
@@ -28,7 +37,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     throw new Error("KUDU_LOCAL_DOCKER requires KUDU_LOCAL_MODE=true.");
   }
   const isProduction = environment.NODE_ENV?.trim().toLowerCase() === "production";
-  if (localMode && isProduction) {
+  if (localMode && isProduction && !localDesktop) {
     throw new Error("KUDU_LOCAL_MODE is only available outside production.");
   }
 
@@ -54,7 +63,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
 
   const rawPort = environment.PORT ?? "3000";
   const port = Number(rawPort);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (!Number.isInteger(port) || port < (localDesktop ? 0 : 1) || port > 65_535) {
     throw new Error("PORT must be an integer between 1 and 65535.");
   }
   const logLevel = environment.LOG_LEVEL?.trim() || "info";
@@ -84,7 +93,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     throw new Error("KUDU_LOCAL_DOCKER_PORT must differ from the loopback API port.");
   }
 
-  if (isProduction) {
+  if (isProduction && !localDesktop) {
     if (!new AuthManager(auth).configured) {
       throw new Error(
         "Production requires a valid KUDU_AUTH_PASSWORD_HASH and a SESSION_SECRET of at least 32 bytes.",
@@ -104,6 +113,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     logLevel,
     auth,
     localMode,
+    localDesktop,
     localDocker,
     localDockerPort,
   };

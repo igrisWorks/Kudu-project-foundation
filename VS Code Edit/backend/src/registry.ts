@@ -14,10 +14,12 @@ import {
   type ExternalIdentifier,
   type Page,
 } from "@kudu/shared";
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { sql, type Kysely } from "kysely";
 import type { Database, StoredSourceConfiguration } from "./database.js";
 import { ApiFailure } from "./errors.js";
+import { isSqliteDatabase, lockSqliteWrite } from "./sqlite-database.js";
 import {
   validateAssetCreate,
   validateAssetUpdate,
@@ -93,6 +95,12 @@ const assetProjection = [
 
 function searchPattern(search: string): string {
   return `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+}
+
+function caseInsensitiveLike(db: Kysely<Database>, column: string, pattern: string) {
+  return isSqliteDatabase(db)
+    ? sql<boolean>`lower(${sql.ref(column)}) LIKE lower(${pattern}) ESCAPE char(92)`
+    : sql<boolean>`lower(${sql.ref(column)}) LIKE lower(${pattern}) ESCAPE chr(92)`;
 }
 
 function queryString(query: unknown, field: string): string | undefined {
@@ -279,10 +287,10 @@ async function ensureParent(
   if (assetId) {
     const cycle = await sql<{ id: string }>`
       WITH RECURSIVE descendants(id) AS (
-        SELECT id FROM kudu.assets WHERE parent_asset_id = ${assetId}
+      SELECT id FROM assets WHERE parent_asset_id = ${assetId}
         UNION
         SELECT child.id
-        FROM kudu.assets AS child
+        FROM assets AS child
         INNER JOIN descendants AS parent ON child.parent_asset_id = parent.id
       )
       SELECT id FROM descendants WHERE id = ${parentAssetId} LIMIT 1
@@ -356,14 +364,14 @@ async function listAssets(
     const pattern = searchPattern(search);
     rowsQuery = rowsQuery.where((eb) =>
       eb.or([
-        eb("a.asset_key", "ilike", pattern),
-        eb("a.name", "ilike", pattern),
+        caseInsensitiveLike(db, "a.asset_key", pattern),
+        caseInsensitiveLike(db, "a.name", pattern),
       ]),
     );
     countQuery = countQuery.where((eb) =>
       eb.or([
-        eb("asset_key", "ilike", pattern),
-        eb("name", "ilike", pattern),
+        caseInsensitiveLike(db, "asset_key", pattern),
+        caseInsensitiveLike(db, "name", pattern),
       ]),
     );
   }
@@ -402,14 +410,14 @@ async function listDataSources(
     const pattern = searchPattern(search);
     rowsQuery = rowsQuery.where((eb) =>
       eb.or([
-        eb("source_key", "ilike", pattern),
-        eb("display_name", "ilike", pattern),
+        caseInsensitiveLike(db, "source_key", pattern),
+        caseInsensitiveLike(db, "display_name", pattern),
       ]),
     );
     countQuery = countQuery.where((eb) =>
       eb.or([
-        eb("source_key", "ilike", pattern),
-        eb("display_name", "ilike", pattern),
+        caseInsensitiveLike(db, "source_key", pattern),
+        caseInsensitiveLike(db, "display_name", pattern),
       ]),
     );
   }
@@ -431,11 +439,13 @@ export function registerRegistryRoutes(app: FastifyInstance, db: Kysely<Database
   app.post("/api/v1/assets", async (request, reply) => {
     const input = validateAssetCreate(request.body);
     const id = await db.transaction().execute(async (transaction) => {
-      await sql`SELECT pg_advisory_xact_lock(7224, 2)`.execute(transaction);
+      if (isSqliteDatabase(transaction)) await lockSqliteWrite(transaction);
+      else await sql`SELECT pg_advisory_xact_lock(7224, 2)`.execute(transaction);
       await ensureParent(transaction, input.parentAssetId ?? null);
       const row = await transaction
         .insertInto("assets")
         .values({
+          id: randomUUID(),
           asset_key: input.assetKey,
           name: input.name,
           asset_type: input.assetType,
@@ -459,13 +469,15 @@ export function registerRegistryRoutes(app: FastifyInstance, db: Kysely<Database
     const id = validateUuidParameter(request.params.id, "asset");
     const input = validateAssetUpdate(request.body);
     await db.transaction().execute(async (transaction) => {
-      await sql`SELECT pg_advisory_xact_lock(7224, 2)`.execute(transaction);
-      const current = await transaction
+      if (isSqliteDatabase(transaction)) await lockSqliteWrite(transaction);
+      else await sql`SELECT pg_advisory_xact_lock(7224, 2)`.execute(transaction);
+      const currentQuery = () => transaction
         .selectFrom("assets")
         .select(["id", "parent_asset_id"])
-        .where("id", "=", id)
-        .forUpdate()
-        .executeTakeFirst();
+        .where("id", "=", id);
+      const current = isSqliteDatabase(transaction)
+        ? await currentQuery().executeTakeFirst()
+        : await currentQuery().forUpdate().executeTakeFirst();
       if (!current) throw new ApiFailure(404, "NOT_FOUND", "Asset not found.");
       if (
         input.parentAssetId !== undefined &&
@@ -499,6 +511,7 @@ export function registerRegistryRoutes(app: FastifyInstance, db: Kysely<Database
     const row = await db
       .insertInto("data_sources")
       .values({
+        id: randomUUID(),
         source_key: input.sourceKey,
         display_name: input.displayName,
         source_type: input.sourceType,

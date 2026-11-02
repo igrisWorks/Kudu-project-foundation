@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   EventDetail,
   EventListItem,
@@ -13,6 +13,7 @@ import { sql, type Kysely } from "kysely";
 import type { Database } from "./database.js";
 import { ApiFailure } from "./errors.js";
 import { canonicalJson, validateEventIngest, validateEventListFilters } from "./event-validation.js";
+import { isSqliteDatabase, lockSqliteWrite } from "./sqlite-database.js";
 
 interface EventJoinRow {
   id: string;
@@ -24,7 +25,7 @@ interface EventJoinRow {
   asset_name: string | null;
   source_record_id: string | null;
   event_type: string;
-  occurred_at: string;
+  occurred_at: Date | string;
   ingested_at: Date;
   source_timestamp: string;
   deduplication_key: string | null;
@@ -35,7 +36,7 @@ interface EventDetailJoinRow extends EventJoinRow {
   provenance: JsonObject;
 }
 
-const eventListProjection = [
+const eventListProjection = (db: Kysely<Database>) => [
   "e.id as id",
   "e.source_id as source_id",
   "s.source_key as source_key",
@@ -45,14 +46,16 @@ const eventListProjection = [
   "a.name as asset_name",
   "e.source_record_id as source_record_id",
   "e.event_type as event_type",
-  sql<string>`to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`.as("occurred_at"),
+  isSqliteDatabase(db)
+    ? sql<string>`e.occurred_at`.as("occurred_at")
+    : sql<string>`to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`.as("occurred_at"),
   "e.ingested_at as ingested_at",
   "e.source_timestamp as source_timestamp",
   "e.deduplication_key as deduplication_key",
 ] as const;
 
-const eventDetailProjection = [
-  ...eventListProjection,
+const eventDetailProjection = (db: Kysely<Database>) => [
+  ...eventListProjection(db),
   "e.payload as payload",
   "e.provenance as provenance",
 ] as const;
@@ -77,7 +80,7 @@ function toEventListItem(row: EventJoinRow): EventListItem {
     asset,
     sourceRecordId: row.source_record_id,
     eventType: row.event_type,
-    occurredAt: row.occurred_at,
+    occurredAt: row.occurred_at instanceof Date ? row.occurred_at.toISOString() : row.occurred_at,
     ingestedAt: row.ingested_at.toISOString(),
     sourceTimestamp: row.source_timestamp,
     deduplicationKey: row.deduplication_key,
@@ -97,7 +100,7 @@ async function getEventDetail(db: Kysely<Database>, id: string): Promise<EventDe
     .selectFrom("events as e")
     .innerJoin("data_sources as s", "s.id", "e.source_id")
     .leftJoin("assets as a", "a.id", "e.asset_id")
-    .select(eventDetailProjection)
+    .select(eventDetailProjection(db))
     .where("e.id", "=", id)
     .executeTakeFirst();
   if (!row) throw new ApiFailure(404, "NOT_FOUND", "Event not found.");
@@ -110,7 +113,7 @@ async function listEvents(db: Kysely<Database>, query: unknown): Promise<Page<Ev
     .selectFrom("events as e")
     .innerJoin("data_sources as s", "s.id", "e.source_id")
     .leftJoin("assets as a", "a.id", "e.asset_id")
-    .select(eventListProjection);
+    .select(eventListProjection(db));
   let countQuery = db
     .selectFrom("events as e")
     .innerJoin("data_sources as s", "s.id", "e.source_id")
@@ -126,24 +129,24 @@ async function listEvents(db: Kysely<Database>, query: unknown): Promise<Page<Ev
     countQuery = countQuery.where("e.asset_id", "=", filters.assetId);
   }
   if (filters.sourceKey) {
-    rowsQuery = rowsQuery.where("s.source_key", "ilike", filters.sourceKey);
-    countQuery = countQuery.where("s.source_key", "ilike", filters.sourceKey);
+    rowsQuery = rowsQuery.where(sql<boolean>`lower(s.source_key) LIKE lower(${filters.sourceKey})`);
+    countQuery = countQuery.where(sql<boolean>`lower(s.source_key) LIKE lower(${filters.sourceKey})`);
   }
   if (filters.assetKey) {
-    rowsQuery = rowsQuery.where("a.asset_key", "ilike", filters.assetKey);
-    countQuery = countQuery.where("a.asset_key", "ilike", filters.assetKey);
+    rowsQuery = rowsQuery.where(sql<boolean>`lower(a.asset_key) LIKE lower(${filters.assetKey})`);
+    countQuery = countQuery.where(sql<boolean>`lower(a.asset_key) LIKE lower(${filters.assetKey})`);
   }
   if (filters.eventType) {
     rowsQuery = rowsQuery.where("e.event_type", "=", filters.eventType);
     countQuery = countQuery.where("e.event_type", "=", filters.eventType);
   }
   if (filters.from) {
-    rowsQuery = rowsQuery.where(sql<boolean>`e.occurred_at >= ${filters.from}::timestamptz`);
-    countQuery = countQuery.where(sql<boolean>`e.occurred_at >= ${filters.from}::timestamptz`);
+    rowsQuery = rowsQuery.where("e.occurred_at", ">=", new Date(filters.from));
+    countQuery = countQuery.where("e.occurred_at", ">=", new Date(filters.from));
   }
   if (filters.to) {
-    rowsQuery = rowsQuery.where(sql<boolean>`e.occurred_at <= ${filters.to}::timestamptz`);
-    countQuery = countQuery.where(sql<boolean>`e.occurred_at <= ${filters.to}::timestamptz`);
+    rowsQuery = rowsQuery.where("e.occurred_at", "<=", new Date(filters.to));
+    countQuery = countQuery.where("e.occurred_at", "<=", new Date(filters.to));
   }
 
   const [rows, total] = await Promise.all([
@@ -184,6 +187,7 @@ export async function ingestEvent(
   const input = validateEventIngest(rawInput);
   const contentFingerprint = fingerprint(input);
   const inserted = await db.transaction().execute(async (transaction) => {
+    await lockSqliteWrite(transaction);
     const source = await transaction
       .selectFrom("data_sources")
       .select("id")
@@ -207,37 +211,30 @@ export async function ingestEvent(
       }
     }
 
-    const result = await sql<{ id: string }>`
-      INSERT INTO kudu.events (
-        source_id,
-        asset_id,
-        source_record_id,
-        event_type,
-        occurred_at,
-        source_timestamp,
-        deduplication_key,
-        ingestion_fingerprint,
-        payload,
-        provenance
+    const result = await transaction
+      .insertInto("events")
+      .values({
+        id: randomUUID(),
+        source_id: input.sourceId,
+        asset_id: input.assetId ?? null,
+        source_record_id: input.sourceRecordId ?? null,
+        event_type: input.eventType,
+        occurred_at: input.occurredAt,
+        source_timestamp: input.sourceTimestamp,
+        deduplication_key: input.deduplicationKey ?? null,
+        ingestion_fingerprint: input.deduplicationKey ? contentFingerprint : null,
+        payload: JSON.stringify(input.payload),
+        provenance: JSON.stringify(input.provenance),
+      })
+      .onConflict((conflict) =>
+        conflict
+          .columns(["source_id", "deduplication_key"])
+          .where("deduplication_key", "is not", null)
+          .doNothing(),
       )
-      VALUES (
-        ${input.sourceId},
-        ${input.assetId},
-        ${input.sourceRecordId},
-        ${input.eventType},
-        ${input.occurredAt},
-        ${input.sourceTimestamp},
-        ${input.deduplicationKey},
-        ${input.deduplicationKey ? contentFingerprint : null},
-        ${JSON.stringify(input.payload)}::jsonb,
-        ${JSON.stringify(input.provenance)}::jsonb
-      )
-      ON CONFLICT (source_id, deduplication_key)
-        WHERE deduplication_key IS NOT NULL
-        DO NOTHING
-      RETURNING id
-    `.execute(transaction);
-    if (result.rows[0]) return { id: result.rows[0].id, duplicate: false };
+      .returning("id")
+      .executeTakeFirst();
+    if (result) return { id: result.id, duplicate: false };
 
     const existing = await transaction
       .selectFrom("events")

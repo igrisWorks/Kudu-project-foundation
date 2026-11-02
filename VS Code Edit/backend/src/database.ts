@@ -102,6 +102,7 @@ export function createDatabase(connectionString: string): {
     connectionString,
     max: 10,
     application_name: "kudu-api",
+    options: "-c search_path=kudu,public",
   });
   const db = new Kysely<Database>({
     dialect: new PostgresDialect({ pool }),
