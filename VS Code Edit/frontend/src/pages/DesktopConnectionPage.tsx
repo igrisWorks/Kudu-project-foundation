@@ -6,7 +6,6 @@ export default function DesktopConnectionPage() {
   const [allowInsecureHttp, setAllowInsecureHttp] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  const [showLocalGuidance, setShowLocalGuidance] = useState(false);
   const [localModeInfo, setLocalModeInfo] = useState<DesktopLocalModeInfo | null>(null);
   const isHttp = serverUrl.trim().toLowerCase().startsWith("http://");
 
@@ -43,6 +42,17 @@ export default function DesktopConnectionPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function startLocal() {
+    setBusy(true);
+    setStatus("");
+    try {
+      const result = await window.kuduDesktop?.startLocal();
+      if (!result || result.status !== "connected") setStatus(result?.message ?? "Local startup is unavailable outside the desktop application.");
+    } catch {
+      setStatus("Local startup failed. Inspect local-runtime.log in the application data folder.");
+    } finally { setBusy(false); }
   }
 
   return (
@@ -113,32 +123,16 @@ export default function DesktopConnectionPage() {
           <div>
             <div className="local-mode-label">LOCAL INSTALLATION</div>
             <h2 id="local-mode-title">Run on this computer</h2>
-            <p>Local mode is not enabled in this desktop milestone.</p>
+            <p>Embedded SQLite on this computer. No PostgreSQL, Docker or operator login.</p>
           </div>
           <button
             type="button"
             className="desktop-secondary"
-            aria-expanded={showLocalGuidance}
-            onClick={() => setShowLocalGuidance((visible) => !visible)}
+            disabled={busy || !localModeInfo?.enabled}
+            onClick={() => void startLocal()}
           >
-            {showLocalGuidance ? "Hide requirements" : "View requirements"}
+            {busy ? "Starting…" : "Start KuduNS Local"}
           </button>
-          {showLocalGuidance && (
-            <div className="local-guidance">
-              <p>{localModeInfo?.message ?? "Local mode is not enabled in this desktop build."}</p>
-              <ul>
-                {(localModeInfo?.prerequisites ?? [
-                  "PostgreSQL must be installed and managed separately.",
-                  "Backend database and authentication settings must be provisioned outside the desktop.",
-                  "This build does not start, adopt, or stop a backend process.",
-                ]).map((prerequisite) => <li key={prerequisite}>{prerequisite}</li>)}
-              </ul>
-              <p>
-                After starting a configured KuduNS backend yourself on loopback,
-                connect to it above and acknowledge HTTP for that local connection.
-              </p>
-            </div>
-          )}
         </section>
 
         <footer className="desktop-footer">

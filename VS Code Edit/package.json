@@ -19,12 +19,16 @@
     "db:up": "docker compose up -d db",
     "db:down": "docker compose stop db",
     "db:migrate": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/backend build && pnpm --filter @kudu/backend migrate",
+    "local:import-postgres": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/backend exec node --import tsx src/import-postgres-local.ts",
+    "local:check": "node scripts/check-local.mjs",
     "desktop:build:renderer": "pnpm --filter @kudu/frontend run build:desktop",
-    "desktop:dev": "pnpm run desktop:build:renderer && pnpm --dir desktop run dev",
+    "desktop:dev": "pnpm build && pnpm run desktop:build:renderer && pnpm --dir desktop run dev",
+    "desktop:prepare:local": "pnpm build && node scripts/prepare-desktop-local.mjs",
     "desktop:test:policy": "node --test desktop/connection-policy.test.cjs",
     "desktop:check:runtime": "pnpm --dir desktop run check:appimage",
-    "desktop:package:deb": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:deb",
-    "desktop:package:appimage": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:appimage",
-    "desktop:package:linux": "pnpm run desktop:build:renderer && pnpm --dir desktop run package:linux"
+    "desktop:package:deb": "pnpm run desktop:prepare:local && pnpm run desktop:build:renderer && pnpm --dir desktop run package:deb",
+    "desktop:package:appimage": "pnpm run desktop:prepare:local && pnpm run desktop:build:renderer && pnpm --dir desktop run package:appimage",
+    "desktop:package:linux": "pnpm run desktop:prepare:local && pnpm run desktop:build:renderer && pnpm --dir desktop run package:linux",
+    "desktop:package:win": "node -e \"if(process.platform!=='win32')throw Error('Package Windows SQLite on Windows, not by cross-compiling Linux native modules')\" && pnpm run desktop:prepare:local && pnpm run desktop:build:renderer && pnpm --dir desktop run package:win"
   }
 }

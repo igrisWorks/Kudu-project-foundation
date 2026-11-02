@@ -16,3 +16,8 @@ imports
 *.cer
 .kudu-local-database.json
 .kudu-local-database.json.*
+desktop/local-backend
+release
+*.db
+*.db-wal
+*.db-shm

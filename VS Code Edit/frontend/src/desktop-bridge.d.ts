@@ -10,7 +10,7 @@ declare global {
   }
 
   interface DesktopLocalModeInfo {
-    enabled: false;
+    enabled: boolean;
     message: string;
     prerequisites: string[];
   }
@@ -18,10 +18,12 @@ declare global {
   interface KuduDesktopBridge {
     connectServer(request: DesktopConnectionRequest): Promise<DesktopConnectionResult>;
     getLocalModeInfo(): Promise<DesktopLocalModeInfo>;
+    startLocal(): Promise<DesktopConnectionResult>;
   }
 
   interface Window {
     kuduDesktop?: KuduDesktopBridge;
+    kuduLocal?: { revealDataDirectory(): Promise<void> };
   }
 }
 

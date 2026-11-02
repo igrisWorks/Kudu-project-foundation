@@ -275,10 +275,8 @@ try {
   for (const port of [3000, 5173]) {
     if (!(await checkPort(port))) fail(`port ${port} is already in use. Stop the owning process and retry.`);
   }
-  await checkPostgres();
   const env = { ...process.env, KUDU_LOCAL_MODE: "true", HOST: "127.0.0.1", PORT: "3000" };
-  // The Replit/workspace environment may inject a managed database URL. The local
-  // edition must use only its own ignored settings file or this project's .env.
+  // Local uses its own SQLite file, never an injected PostgreSQL URL.
   delete env.DATABASE_URL;
   if (env.NODE_ENV?.toLowerCase() === "production") fail("KUDU_LOCAL_MODE cannot run with NODE_ENV=production.");
   console.log("Building shared contracts...");

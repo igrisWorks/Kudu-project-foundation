@@ -1,295 +1,135 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  ApiError,
+  createLocalDatabaseBackup,
   getLocalDatabase,
-  initializeLocalDatabase,
-  migrateLocalDatabase,
-  saveLocalDatabase,
-  testLocalDatabase,
-  type LocalDatabaseForm,
+  listLocalDatabaseBackups,
+  restoreLocalDatabaseBackup,
+  type LocalDatabaseBackup,
   type LocalDatabaseResponse,
 } from "../api";
 
-const defaults: LocalDatabaseForm = {
-  host: "127.0.0.1",
-  port: 5432,
-  database: "kudu",
-  username: "kudu",
-  ssl: false,
-};
-
 export default function SettingsPage({ dockerMode = false }: { dockerMode?: boolean }) {
-  const [settings, setSettings] = useState<LocalDatabaseForm>(defaults);
-  const [passwordConfigured, setPasswordConfigured] = useState(false);
-  const [adminUsername, setAdminUsername] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
-  const [confirmInitialization, setConfirmInitialization] = useState(false);
-  const [database, setDatabase] = useState<LocalDatabaseResponse["status"] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"test" | "save" | "migrate" | null>(null);
-  const [message, setMessage] = useState("");
+  const [database, setDatabase] = useState<LocalDatabaseResponse | null>(null);
+  const [backups, setBackups] = useState<LocalDatabaseBackup[]>([]);
+  const [selected, setSelected] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
+  const [message, setMessage] = useState("");
   const refresh = useCallback(async () => {
     try {
-      const response = await getLocalDatabase();
-      setSettings(current => ({
-        ...current,
-        host: !response.status.configured && dockerMode
-          ? "host.docker.internal"
-          : response.settings.host,
-        port: response.settings.port,
-        database: response.settings.database,
-        username: response.settings.username,
-        ssl: response.settings.ssl,
-      }));
-      setPasswordConfigured(response.settings.passwordConfigured);
-      setDatabase(response.status);
-      setError("");
+      const [status, saved] = await Promise.all([getLocalDatabase(), listLocalDatabaseBackups()]);
+      setDatabase(status);
+      setBackups(saved.items);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Database settings could not be loaded.");
-    } finally {
-      setLoading(false);
+      setError(cause instanceof Error ? cause.message : "Local database status is unavailable.");
     }
-  }, [dockerMode]);
-
+  }, []);
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 15_000);
+    const timer = window.setInterval(() => void refresh(), 30_000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const requestInput = (): LocalDatabaseForm => ({
-    ...settings,
-    port: Number(settings.port),
-    ...(settings.password ? { password: settings.password } : {}),
-  });
-
-  const runTest = async () => {
-    setBusy("test");
+  async function backup() {
+    setBusy(true);
     setError("");
     setMessage("");
     try {
-      const response = await testLocalDatabase(requestInput());
-      setMessage(response.message);
+      const result = await createLocalDatabaseBackup();
+      setMessage(`Consistent backup created: ${result.backup.filePath}`);
+      await refresh();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "PostgreSQL connection test failed.");
-    } finally {
-      setBusy(null);
-    }
-  };
+      setError(cause instanceof Error ? cause.message : "Backup failed.");
+    } finally { setBusy(false); }
+  }
 
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy("save");
+  async function restore() {
+    if (!selected || !confirmed) return;
+    setBusy(true);
     setError("");
     setMessage("");
     try {
-      const response = await saveLocalDatabase(requestInput());
-      setDatabase(response.status);
-      setPasswordConfigured(response.settings.passwordConfigured);
-      setSettings(current => ({ ...current, password: "" }));
-      setMessage("Connection saved. PostgreSQL was verified and migrations are current.");
+      const result = await restoreLocalDatabaseBackup(selected);
+      setDatabase(result.status);
+      setConfirmed(false);
+      setMessage(`Backup restored. The previous data is preserved at ${result.safetyBackup.filePath}`);
+      await refresh();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "The connection could not be saved.");
-    } finally {
-      setBusy(null);
-    }
-  };
+      setError(cause instanceof Error ? cause.message : "Restore failed. Your selection has been preserved.");
+    } finally { setBusy(false); }
+  }
 
-  const applyMigrations = async () => {
-    setBusy("migrate");
-    setError("");
-    setMessage("");
-    try {
-      const response = await migrateLocalDatabase();
-      setDatabase(response.status);
-      setMessage(response.applied.length
-        ? `Applied ${response.applied.length} migration${response.applied.length === 1 ? "" : "s"}.`
-        : "Database schema is already current.");
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Database migrations could not be applied.");
-    } finally {
-      setBusy(null);
-      void refresh();
-    }
-  };
-
-  const initializeDatabase = async () => {
-    setBusy("save");
-    setError("");
-    setMessage("");
-    try {
-      const response = await initializeLocalDatabase({
-        ...requestInput(),
-        adminUsername,
-        adminPassword,
-        confirm: true,
-      });
-      setDatabase(response.status);
-      setPasswordConfigured(response.settings.passwordConfigured);
-      setSettings(current => ({ ...current, password: "" }));
-      setConfirmInitialization(false);
-      setMessage("The KuduNS database is ready. PostgreSQL was verified and migrations are current.");
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "The database could not be initialized.");
-    } finally {
-      setBusy(null);
-      setAdminPassword("");
-      void refresh();
-    }
-  };
-
-  const update = (key: keyof LocalDatabaseForm, value: string) => {
-    setSettings(current => ({
-      ...current,
-      [key]: key === "port" ? (value === "" ? 0 : Number(value)) : value,
-    }));
-  };
-
-  const migrationLabel = database?.migrationState === "current"
-    ? "Schema current"
-    : database?.migrationState === "not_initialized"
-      ? "Not initialized"
-      : database?.migrationState === "pending"
-        ? "Migrations pending"
-        : database?.migrationState === "unavailable"
-          ? "Unavailable"
-          : "Not configured";
-
-  return <main className="page-main settings-page">
+  return <main className="registry-shell">
     <div className="page-heading">
       <div>
         <div className="eyebrow"><span className="eyebrow-line" />LOCAL CONFIGURATION</div>
-        <h1>Database settings</h1>
-        <p>
-          {dockerMode
-            ? "Connect this local Docker instance to PostgreSQL. The browser never receives the saved password."
-            : "Connect KuduNS to PostgreSQL on this computer. The browser never receives the saved password."}
-        </p>
+        <h1>Local database</h1>
+        <p>KuduNS manages its embedded SQLite database automatically. No database server, users or passwords are required.</p>
+        <p className="field-hint">Upgrading from PostgreSQL Local? Existing PostgreSQL data has not been imported or deleted. Stop Local and use the explicit <code>pnpm local:import-postgres</code> migration described in <code>docs/LOCAL-SQLITE.md</code> before relying on this database.</p>
       </div>
     </div>
-
+    {error && <p className="error-note" role="alert">{error}</p>}
+    {message && <p className="settings-security-note" role="status">{message}</p>}
     <section className="panel settings-panel" aria-labelledby="database-settings-heading">
       <div className="panel-heading">
-        <div>
-          <p className="section-label">POSTGRESQL</p>
-          <h2 id="database-settings-heading">Local database connection</h2>
-        </div>
+        <div><p className="section-label">EMBEDDED STORAGE</p><h2 id="database-settings-heading">SQLite database</h2></div>
         <span className={`status-pill ${database?.connected ? "good" : "bad"}`} role="status">
-          {loading ? "Checking" : database?.connected ? "Connected" : "Disconnected"}
+          {database ? "Ready" : "Checking"}
         </span>
       </div>
-
-      {error && <p className="notice error" role="alert">{error}</p>}
-      {message && <p className="notice settings-success" role="status">{message}</p>}
-
-      <form className="form-panel settings-form" onSubmit={save}>
-        <div className="form-grid">
-          <div className="field">
-            <label htmlFor="db-host">Host or address</label>
-            <input id="db-host" value={settings.host} onChange={event => update("host", event.target.value)} autoComplete="off" required />
-            <span className="field-hint">
-              {dockerMode
-                ? "Use host.docker.internal for PostgreSQL on the host, or the service name for a database on a shared Docker network. Do not use localhost for a separate database."
-                : "Loopback only: 127.0.0.1, ::1, or localhost."}
-            </span>
-          </div>
-          <div className="field">
-            <label htmlFor="db-port">Port</label>
-            <input id="db-port" type="number" min="1" max="65535" value={settings.port || ""} onChange={event => update("port", event.target.value)} required />
-          </div>
-          <div className="field">
-            <label htmlFor="db-name">Database name</label>
-            <input id="db-name" value={settings.database} onChange={event => update("database", event.target.value)} autoComplete="off" required />
-          </div>
-          <div className="field">
-            <label htmlFor="db-user">Database username</label>
-            <input id="db-user" value={settings.username} onChange={event => update("username", event.target.value)} autoComplete="username" required />
-          </div>
-          <div className="field span-2">
-            <label htmlFor="db-password">Database password</label>
-            <input
-              id="db-password"
-              type="password"
-              value={settings.password ?? ""}
-              onChange={event => update("password", event.target.value)}
-              autoComplete="new-password"
-              placeholder={passwordConfigured ? "Saved password is protected; leave blank to keep it" : "Enter password if required"}
-            />
-            <span className="field-hint">Saved only by the backend in a local file restricted to your operating-system account.</span>
-          </div>
-          <div className="field span-2">
-            <label className="check-row" htmlFor="db-ssl">
-              <input
-                id="db-ssl"
-                type="checkbox"
-                checked={settings.ssl}
-                onChange={event => setSettings(current => ({ ...current, ssl: event.target.checked }))}
-              />
-              <span>Require TLS and verify the PostgreSQL server certificate</span>
-            </label>
-            <span className="field-hint">Uses trusted operating-system certificates. Kudu never disables certificate verification; custom per-database CA uploads are not supported.</span>
-          </div>
-        </div>
-
-        <div className="settings-state">
-          <div>
-            <span className="section-label">DATABASE STATUS</span>
-            <strong>{migrationLabel}</strong>
-            <span className="field-hint">
-              {database?.connected
-                ? database.migrationState === "current"
-                  ? "Connection verified. Data remains intact across restarts."
-                  : `${database.pendingMigrations.length} migration${database.pendingMigrations.length === 1 ? "" : "s"} need to be applied.`
-                : database?.error ?? "Checking local PostgreSQL availability."}
-            </span>
-          </div>
-          {database?.connected && database.migrationState !== "current" &&
-            <button className="button" type="button" onClick={() => void applyMigrations()} disabled={busy !== null}>
-              {busy === "migrate" ? "Applying…" : "Apply migrations"}
-            </button>}
-        </div>
-
-        <div className="form-actions">
-          <span className="field-hint">Saving verifies this connection and applies pending versioned migrations. It never deletes or resets data.</span>
-          <div className="form-actions-end">
-            <button className="button" type="button" onClick={() => void runTest()} disabled={busy !== null}>
-              {busy === "test" ? "Testing…" : "Test connection"}
-            </button>
-            <button className="button button-primary" type="submit" disabled={busy !== null}>
-              {busy === "save" ? "Saving…" : "Save connection"}
-            </button>
-          </div>
-        </div>
-      </form>
-
-      <details className="settings-provisioning">
-        <summary>Create KuduNS Database</summary>
-        <p>
-          Kudu will connect to <strong>{settings.host}:{settings.port}</strong> and create <strong>{settings.database}</strong> only if it is missing. It creates the application role only if missing, applies the existing Kudu migrations, and verifies the application connection. Existing databases are never dropped or overwritten, and existing role passwords are not changed. The administrator password is used only for this request and is not saved.
-        </p>
-        <div className="form-grid">
-          <div className="field">
-            <label htmlFor="db-admin-user">PostgreSQL administrator username</label>
-            <input id="db-admin-user" value={adminUsername} onChange={event => setAdminUsername(event.target.value)} autoComplete="username" required />
-          </div>
-          <div className="field">
-            <label htmlFor="db-admin-password">PostgreSQL administrator password</label>
-            <input id="db-admin-password" type="password" value={adminPassword} onChange={event => setAdminPassword(event.target.value)} autoComplete="current-password" required />
-          </div>
-        </div>
-        <label className="check-row settings-confirm">
-          <input type="checkbox" checked={confirmInitialization} onChange={event => setConfirmInitialization(event.target.checked)} />
-          <span>I authorize Kudu to create missing objects for {settings.database} at {settings.host}:{settings.port} and apply the required migrations and permissions.</span>
-        </label>
-        <button className="button button-primary" type="button" disabled={busy !== null || !confirmInitialization || !adminUsername.trim() || !adminPassword} onClick={() => void initializeDatabase()}>
-          {busy === "save" ? "Creating…" : "Create KuduNS Database"}
-        </button>
-      </details>
+      <dl className="settings-status-grid">
+        <div><dt>Database file</dt><dd><code>{database?.filePath ?? "Checking…"}</code></dd></div>
+        <div><dt>SQLite version</dt><dd>{database?.sqliteVersion ?? "—"}</dd></div>
+        <div><dt>Schema version</dt><dd>{database?.schemaVersion ?? "—"}</dd></div>
+        <div><dt>Migrations</dt><dd>{database?.migrationState ?? "Checking…"}</dd></div>
+        <div><dt>Integrity</dt><dd>{database?.integrity ?? "Checking…"}</dd></div>
+        <div><dt>Last successful initialization</dt><dd>{database?.lastSuccessfulInitialization ?? "—"}</dd></div>
+      </dl>
+      <div className="form-actions">
+        <button className="button button-secondary" type="button" onClick={() => void refresh()} disabled={busy}>Check status</button>
+        <button className="button button-secondary" type="button" disabled={!database} onClick={() => {
+          if (!navigator.clipboard?.writeText) { setError("Copy is unavailable in this browser. Select the database location above."); return; }
+          if (database) void navigator.clipboard.writeText(database.dataDirectory)
+            .then(() => setMessage("Database folder path copied."))
+            .catch(() => setError("The browser cannot copy this path. Select the database location above."));
+        }}>Copy folder path</button>
+        {window.kuduLocal && <button className="button button-secondary" type="button" onClick={() => {
+          void window.kuduLocal?.revealDataDirectory().catch(() => setError("The database folder could not be opened."));
+        }}>Open data folder</button>}
+      </div>
+      <p className="field-hint">{dockerMode
+        ? "The database and backups are stored in the persistent Docker data volume. Container recreation does not remove them."
+        : "Data is stored in your operating-system user application data folder, not in the project or current working directory."}</p>
     </section>
-    <p className="settings-security-note">
-      Local Web Edition has no operator sign-in and is only safe on this computer. Keep the server on its default loopback address; do not expose it to a network.
-    </p>
+    <section className="panel settings-panel" aria-labelledby="backup-heading">
+      <div className="panel-heading">
+        <div><p className="section-label">RECOVERY</p><h2 id="backup-heading">Backups and restore</h2></div>
+        <button className="button button-primary" type="button" disabled={busy || !database} onClick={() => void backup()}>
+          {busy ? "Working…" : "Create backup"}
+        </button>
+      </div>
+      <p>Backups use SQLite's consistent backup API. Existing backups are never automatically deleted.</p>
+      <p className="field-hint">Backup folder: <code>{database?.backupsDirectory ?? "Checking…"}</code></p>
+      <div className="field">
+        <label htmlFor="local-backup">Backup to restore</label>
+        <select id="local-backup" value={selected} disabled={busy} onChange={event => {
+          setSelected(event.target.value); setConfirmed(false);
+        }}>
+          <option value="">Choose a backup</option>
+          {backups.map(item => <option key={item.fileName} value={item.fileName}>
+            {item.createdAt} · {Math.ceil(item.sizeBytes / 1024)} KB · {item.fileName}
+          </option>)}
+        </select>
+      </div>
+      <label className="check-row settings-confirm">
+        <input type="checkbox" checked={confirmed} disabled={busy || !selected} onChange={event => setConfirmed(event.target.checked)} />
+        <span>I understand this replaces current local data. KuduNS will first create a recoverable safety backup.</span>
+      </label>
+      <button className="button button-secondary" type="button" disabled={busy || !selected || !confirmed} onClick={() => void restore()}>
+        Restore selected backup
+      </button>
+    </section>
+    <p className="settings-security-note">Local Edition has no operator sign-in. Keep it bound to loopback and do not expose it to a LAN or public network. PostgreSQL Server and Enterprise deployments remain separate.</p>
   </main>;
 }

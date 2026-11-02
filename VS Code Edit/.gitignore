@@ -3,6 +3,10 @@ node_modules/
 dist/
 **/dist/
 **/dist-desktop/
+/desktop/local-backend/
+*.db
+*.db-wal
+*.db-shm
 /release/
 .env
 .env.*

@@ -57,10 +57,7 @@ export function isPortAvailable(port) {
 
 function requestedProfiles(args) {
   if (args.length === 0) return [];
-  if (args.length === 2 && args[0] === "--profile" && args[1] === "local-postgres") {
-    return args;
-  }
-  throw new Error("Usage: pnpm docker:local [-- --profile local-postgres]");
+  throw new Error("Usage: pnpm docker:local. Local now uses embedded SQLite; no PostgreSQL profile is required. Existing PostgreSQL volumes are not removed.");
 }
 
 async function startLocalDocker() {

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readdir, stat, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import BetterSqlite3 from "better-sqlite3";
 import { sql } from "kysely";
-import { createSqliteDatabase, runSqliteMigrations, verifySqliteIntegrity, type SqliteDatabaseHandle } from "./sqlite-database.js";
+import { createSqliteDatabase, verifySqliteIntegrity, type SqliteDatabaseHandle } from "./sqlite-database.js";
 
 const backupNamePattern = /^kuduns-[A-Za-z0-9TZ-]+-[0-9a-f-]+\.db$/i;
 const dataTables = [
@@ -60,6 +60,9 @@ export interface LocalDatabaseStatus {
 }
 
 export class LocalDatabaseManager {
+  private readonly initializedAt = new Date().toISOString();
+  private maintenance = false;
+  private activeMutations = 0;
   private constructor(private readonly handle: SqliteDatabaseHandle) {}
 
   static async create(dataDirectory?: string): Promise<LocalDatabaseManager> {
@@ -77,6 +80,16 @@ export class LocalDatabaseManager {
     return this.handle.filePath;
   }
 
+  tryBeginMutation(): boolean {
+    if (this.maintenance) return false;
+    this.activeMutations += 1;
+    return true;
+  }
+
+  endMutation(): void {
+    this.activeMutations = Math.max(0, this.activeMutations - 1);
+  }
+
   async initialize(): Promise<void> {
     await sql`select 1`.execute(this.db);
     verifySqliteIntegrity(this.handle.raw);
@@ -84,7 +97,6 @@ export class LocalDatabaseManager {
 
   async status(): Promise<LocalDatabaseStatus> {
     await sql`select 1`.execute(this.db);
-    verifySqliteIntegrity(this.handle.raw);
     const sqliteVersion = this.handle.raw.prepare("SELECT sqlite_version() AS version").get() as {
       version: string;
     };
@@ -101,7 +113,7 @@ export class LocalDatabaseManager {
       schemaVersion: latestMigration?.name ?? "none",
       migrationState: "current",
       integrity: "ok",
-      lastSuccessfulInitialization: latestMigration?.applied_at ?? null,
+      lastSuccessfulInitialization: this.initializedAt,
     };
   }
 
@@ -129,6 +141,8 @@ export class LocalDatabaseManager {
     const fileName = `kuduns-${stamp}-${randomUUID()}.db`;
     const filePath = join(this.handle.backupsDirectory, fileName);
     await this.handle.raw.backup(filePath);
+    const validation = new BetterSqlite3(filePath, { readonly: true, fileMustExist: true });
+    try { verifySqliteIntegrity(validation); } finally { validation.close(); }
     if (process.platform !== "win32") await chmod(filePath, 0o600);
     const info = await stat(filePath);
     return {
@@ -140,10 +154,19 @@ export class LocalDatabaseManager {
   }
 
   async restoreBackup(fileName: string): Promise<{ restored: LocalDatabaseBackup; safetyBackup: LocalDatabaseBackup }> {
+    if (this.maintenance) throw new Error("Another restore is already in progress.");
+    this.maintenance = true;
+    try {
+      const deadline = Date.now() + 30_000;
+      while (this.activeMutations > 0) {
+        if (Date.now() > deadline) throw new Error("Active imports or writes did not finish. Wait for them to complete before restoring.");
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
     if (basename(fileName) !== fileName || !backupNamePattern.test(fileName)) {
       throw new Error("Choose a backup created by KuduNS.");
     }
     const selectedPath = join(this.handle.backupsDirectory, fileName);
+    if (!(await lstat(selectedPath)).isFile()) throw new Error("Choose a regular KuduNS backup file.");
     const selected = new BetterSqlite3(selectedPath, { readonly: true, fileMustExist: true });
     try {
       verifySqliteIntegrity(selected);
@@ -151,6 +174,10 @@ export class LocalDatabaseManager {
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'app_schema_migrations'",
       ).get();
       if (!hasMigrationHistory) throw new Error("This backup does not contain KuduNS migration history.");
+      const historySql = "SELECT name, checksum FROM app_schema_migrations ORDER BY name";
+      if (JSON.stringify(selected.prepare(historySql).all()) !== JSON.stringify(this.handle.raw.prepare(historySql).all())) {
+        throw new Error("This backup uses a different application schema. Open a copy with the matching KuduNS version and migrate it before restoring; the current database was not changed.");
+      }
     } finally {
       selected.close();
     }
@@ -158,26 +185,17 @@ export class LocalDatabaseManager {
     const safetyBackup = await this.createBackup();
     try {
       this.replaceDataFromBackup(selectedPath);
-      await runSqliteMigrations(this.handle.raw, this.handle.migrationsDirectory);
-      verifySqliteIntegrity(this.handle.raw);
     } catch (restoreError) {
-      try {
-        this.replaceDataFromBackup(safetyBackup.filePath);
-        await runSqliteMigrations(this.handle.raw, this.handle.migrationsDirectory);
-        verifySqliteIntegrity(this.handle.raw);
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [restoreError, rollbackError],
-          "Restore failed, and automatic recovery from the safety backup also failed. Keep all database and backup files unchanged.",
-        );
-      }
       throw new Error(
-        `Restore was not applied. The current database was restored from its safety backup. ${restoreError instanceof Error ? restoreError.message : "The backup could not be restored."}`,
+        `Restore was rolled back atomically; current data was not replaced. Safety backup: ${safetyBackup.filePath}. ${restoreError instanceof Error ? restoreError.message : "The backup could not be restored."}`,
       );
     }
     const restored = (await this.listBackups()).find((backup) => backup.fileName === fileName);
     if (!restored) throw new Error("The selected backup disappeared after restore.");
     return { restored, safetyBackup };
+    } finally {
+      this.maintenance = false;
+    }
   }
 
   async close(): Promise<void> {
@@ -189,6 +207,7 @@ export class LocalDatabaseManager {
     attach.run(sourcePath);
     try {
       const replace = this.handle.raw.transaction(() => {
+        this.handle.raw.pragma("defer_foreign_keys = ON");
         this.handle.raw.exec(`
           DELETE FROM events;
           DELETE FROM data_source_event_mappings;
@@ -206,6 +225,7 @@ export class LocalDatabaseManager {
           INSERT INTO app_schema_migrations (name, checksum, applied_at)
             SELECT name, checksum, applied_at FROM restore_source.app_schema_migrations;
         `);
+        verifySqliteIntegrity(this.handle.raw);
       });
       replace.immediate();
     } finally {

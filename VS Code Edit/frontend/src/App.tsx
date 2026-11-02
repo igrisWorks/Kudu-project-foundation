@@ -88,7 +88,7 @@ export default function App() {
   }
 
   return <AppShell localMode={localMode} onLogout={() => void handleLogout()}><Switch>
-    <Route path="/" component={HomePage} />
+    <Route path="/"><HomePage localMode={localMode} /></Route>
     <Route path="/namespace" component={NamespacePage} />
     <Route path="/assets" component={AssetListPage} />
     <Route path="/assets/new"><AssetFormPage editing={false} /></Route>

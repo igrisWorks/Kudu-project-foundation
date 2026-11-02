@@ -5,11 +5,12 @@ FROM node:24.22.1-bookworm-slim AS build
 
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     NODE_USE_SYSTEM_CA=1 \
-    npm_config_strict_ssl=true
+    npm_config_strict_ssl=true \
+    npm_config_nodedir=/usr/local
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --reinstall ca-certificates \
+    && apt-get install -y --no-install-recommends --reinstall ca-certificates python3 make g++ \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -70,6 +71,7 @@ COPY --from=build --chown=node:node /app/shared/package.json ./shared/package.js
 COPY --from=build --chown=node:node /app/shared/dist ./shared/dist
 COPY --from=build --chown=node:node /app/frontend/dist ./frontend/dist
 COPY --from=build --chown=node:node /app/database/migrations ./database/migrations
+COPY --from=build --chown=node:node /app/database/sqlite-migrations ./database/sqlite-migrations
 
 RUN rm -rf backend/dist/test-support \
     && rm -f backend/dist/*.test.js backend/dist/auth-cli.js \

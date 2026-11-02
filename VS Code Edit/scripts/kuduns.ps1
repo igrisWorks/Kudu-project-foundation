@@ -3,8 +3,14 @@ param(
   [switch]$Setup,
   [switch]$Check,
   [switch]$SelfTest,
-  [switch]$NoBrowser
+  [switch]$NoBrowser,
+  [switch]$Server
 )
+
+if (-not $Server) {
+  & (Join-Path $PSScriptRoot "kuduns-local.ps1") -Setup:$Setup -Check:$Check -SelfTest:$SelfTest -NoBrowser:$NoBrowser
+  exit $LASTEXITCODE
+}
 
 $ErrorActionPreference = "Stop"
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot

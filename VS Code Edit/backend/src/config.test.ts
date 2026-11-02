@@ -17,6 +17,7 @@ test("loads a valid PostgreSQL URL and applies local defaults", () => {
         cookieSecure: true,
       },
       localMode: false,
+    localDesktop: false,
       localDocker: false,
       localDockerPort: 3000,
     },
@@ -93,9 +94,20 @@ test("local mode does not require database or operator authentication configurat
       cookieSecure: true,
     },
     localMode: true,
+    localDesktop: false,
     localDocker: false,
     localDockerPort: 3000,
   });
+});
+
+test("Local ignores legacy PostgreSQL URLs and Desktop remains an explicit loopback-only edition", () => {
+  const local = loadConfig({ KUDU_LOCAL_MODE: "true", DATABASE_URL: "postgresql://unused/legacy" });
+  assert.equal(local.databaseUrl, undefined);
+  const desktop = loadConfig({ KUDU_LOCAL_MODE: "true", KUDU_LOCAL_DESKTOP: "true", NODE_ENV: "production", PORT: "0" });
+  assert.equal(desktop.host, "127.0.0.1");
+  assert.equal(desktop.port, 0);
+  assert.throws(() => loadConfig({ KUDU_LOCAL_DESKTOP: "true" }), /requires/);
+  assert.throws(() => loadConfig({ KUDU_LOCAL_MODE: "true", KUDU_LOCAL_DESKTOP: "true", KUDU_LOCAL_DOCKER: "true" }), /cannot be enabled together/);
 });
 
 test("Docker local mode requires explicit no-login mode and a separate proxy port", () => {

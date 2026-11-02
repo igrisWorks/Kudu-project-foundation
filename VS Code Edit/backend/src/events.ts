@@ -13,7 +13,7 @@ import { sql, type Kysely } from "kysely";
 import type { Database } from "./database.js";
 import { ApiFailure } from "./errors.js";
 import { canonicalJson, validateEventIngest, validateEventListFilters } from "./event-validation.js";
-import { isSqliteDatabase, lockSqliteWrite } from "./sqlite-database.js";
+import { isSqliteDatabase, lockSqliteWrite, sqliteTimestamp } from "./sqlite-database.js";
 
 interface EventJoinRow {
   id: string;
@@ -141,12 +141,18 @@ async function listEvents(db: Kysely<Database>, query: unknown): Promise<Page<Ev
     countQuery = countQuery.where("e.event_type", "=", filters.eventType);
   }
   if (filters.from) {
-    rowsQuery = rowsQuery.where("e.occurred_at", ">=", new Date(filters.from));
-    countQuery = countQuery.where("e.occurred_at", ">=", new Date(filters.from));
+    const condition = isSqliteDatabase(db)
+      ? sql<boolean>`e.occurred_at >= ${sqliteTimestamp(filters.from)}`
+      : sql<boolean>`e.occurred_at >= ${filters.from}::timestamptz`;
+    rowsQuery = rowsQuery.where(condition);
+    countQuery = countQuery.where(condition);
   }
   if (filters.to) {
-    rowsQuery = rowsQuery.where("e.occurred_at", "<=", new Date(filters.to));
-    countQuery = countQuery.where("e.occurred_at", "<=", new Date(filters.to));
+    const condition = isSqliteDatabase(db)
+      ? sql<boolean>`e.occurred_at <= ${sqliteTimestamp(filters.to)}`
+      : sql<boolean>`e.occurred_at <= ${filters.to}::timestamptz`;
+    rowsQuery = rowsQuery.where(condition);
+    countQuery = countQuery.where(condition);
   }
 
   const [rows, total] = await Promise.all([
@@ -219,7 +225,7 @@ export async function ingestEvent(
         asset_id: input.assetId ?? null,
         source_record_id: input.sourceRecordId ?? null,
         event_type: input.eventType,
-        occurred_at: input.occurredAt,
+        occurred_at: isSqliteDatabase(db) ? sqliteTimestamp(input.occurredAt) : input.occurredAt,
         source_timestamp: input.sourceTimestamp,
         deduplication_key: input.deduplicationKey ?? null,
         ingestion_fingerprint: input.deduplicationKey ? contentFingerprint : null,

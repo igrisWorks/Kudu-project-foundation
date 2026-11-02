@@ -9,9 +9,12 @@
     "main.cjs",
     "preload.cjs",
     "connection-policy.cjs",
+    "local-runtime.cjs",
+    "local-preload.cjs",
     "package.json"
   ],
   "extraResources": [
+    { "from": "local-backend", "to": "local-backend" },
     {
       "from": "../frontend/dist-desktop",
       "to": "renderer",
@@ -24,6 +27,8 @@
       ]
     }
   ],
+  "win": { "target": [{ "target": "nsis", "arch": ["x64"] }] },
+  "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true },
   "linux": {
     "category": "Utility",
     "executableArgs": [],

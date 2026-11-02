@@ -4,7 +4,7 @@ Kudu is an on-premises industrial data platform foundation. This directory is th
 
 ## Start locally
 
-Prerequisites: Node.js 24 LTS and pnpm 10.26.1 via Corepack. For local development, use PostgreSQL 18 installed locally (Docker is optional). For production deployment, use Docker Compose as described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Prerequisites for Local source execution: Node.js 24 LTS and pnpm 10.26.1 via Corepack. Local uses embedded SQLite; PostgreSQL and Docker are not required. See [Local SQLite setup, backups, legacy-data migration and desktop packaging](docs/LOCAL-SQLITE.md). Server/Enterprise retain PostgreSQL and the secure deployment procedure in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 The default `pnpm dev` command runs the explicit, loopback-only Local Web Edition without operator sign-in. It does not need `KUDU_AUTH_PASSWORD_HASH` or `SESSION_SECRET`:
 
@@ -14,7 +14,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Open <http://127.0.0.1:5173>. Configure or provision a local PostgreSQL connection at **Settings → Database**. The launcher checks Node/pnpm versions, local database reachability, ports, and duplicate instances; on Windows it attempts to start one matching stopped PostgreSQL service when permitted. Use `pnpm dev -- --no-browser` to suppress the browser. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#local-web-edition) for exact setup steps, credential storage, OS limitations, and troubleshooting.
+Open <http://127.0.0.1:5173>. SQLite is initialized automatically in your OS user application-data directory. Settings shows its location and backup/restore controls, not PostgreSQL credentials. The launcher checks Node/pnpm versions, ports and duplicate instances; it never starts PostgreSQL. Use `pnpm dev -- --no-browser` to suppress the browser. Existing PostgreSQL Local data is preserved but must be explicitly imported with `pnpm local:import-postgres` before relying on the new Local database.
 
 The original authenticated development edition remains available explicitly as `pnpm dev:secure`. On Windows, `.\scripts\kuduns.ps1 -Setup` is the guided secure-edition setup.
 

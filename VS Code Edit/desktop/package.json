@@ -2,7 +2,7 @@
   "name": "kuduns-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Linux desktop shell for KuduNS",
+  "description": "KuduNS Local SQLite desktop and secure server client",
   "desktopName": "KuduNS",
   "packageManager": "pnpm@10.26.1",
   "engines": {
@@ -15,7 +15,8 @@
     "check:appimage": "bash check-appimage-runtime.sh ../release/desktop/KuduNS-0.1.0.AppImage",
     "package:deb": "electron-builder --config electron-builder.json --linux deb --x64",
     "package:appimage": "electron-builder --config electron-builder.json --linux AppImage --x64",
-    "package:linux": "electron-builder --config electron-builder.json --linux deb AppImage --x64"
+    "package:linux": "electron-builder --config electron-builder.json --linux deb AppImage --x64",
+    "package:win": "electron-builder --config electron-builder.json --win nsis --x64"
   },
   "devDependencies": {
     "electron": "45.0.0",

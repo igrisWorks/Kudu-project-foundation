@@ -12,6 +12,7 @@ import {
   type KyselyPlugin,
   type PluginTransformQueryArgs,
   type PluginTransformResultArgs,
+  type PrimitiveValueListNode,
   type QueryResult,
   type RootOperationNode,
   type Transaction,
@@ -35,7 +36,6 @@ const dateColumns = new Set([
   "updated_at",
   "archived_at",
   "last_successful_sync_at",
-  "occurred_at",
   "ingested_at",
   "validated_at",
   "activated_at",
@@ -48,6 +48,13 @@ export interface SqliteDatabaseHandle {
   backupsDirectory: string;
   migrationsDirectory: string;
   close(): Promise<void>;
+}
+
+export function sqliteTimestamp(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error("A valid timestamp is required.");
+  const fraction = /\.(\d+)/.exec(value)?.[1] ?? "";
+  return `${date.toISOString().slice(0, 19)}.${fraction.padEnd(6, "0").slice(0, 6)}Z`;
 }
 
 export function localDataDirectory(
@@ -71,6 +78,14 @@ export function localDataDirectory(
 }
 
 class SqliteValueTransformer extends OperationNodeTransformer {
+  protected override transformPrimitiveValueList(node: PrimitiveValueListNode): PrimitiveValueListNode {
+    return {
+      ...node,
+      values: node.values.map(value =>
+        typeof value === "boolean" ? Number(value) : value instanceof Date ? value.toISOString() : value),
+    };
+  }
+
   protected override transformValue(node: ValueNode): ValueNode {
     const transformed = super.transformValue(node);
     if (typeof transformed.value === "boolean") {

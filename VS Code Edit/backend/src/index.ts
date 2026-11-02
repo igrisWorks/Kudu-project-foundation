@@ -8,6 +8,9 @@ import { createDatabase } from "./database.js";
 import { LocalDatabaseManager } from "./local-database.js";
 
 const config = loadConfig(process.env);
+if (config.localDesktop && !process.versions.electron) {
+  throw new Error("KUDU_LOCAL_DESKTOP is supported only by the packaged Electron Local runtime.");
+}
 if (config.localDocker && (process.platform !== "linux" || !existsSync("/.dockerenv"))) {
   throw new Error("KUDU_LOCAL_DOCKER is supported only inside a Docker Linux container.");
 }

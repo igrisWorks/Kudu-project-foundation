@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld("kuduDesktop", Object.freeze({
     allowInsecureHttp: request?.allowInsecureHttp === true,
   }),
   getLocalModeInfo: () => ipcRenderer.invoke("desktop:local-mode-info"),
+  startLocal: () => ipcRenderer.invoke("desktop:start-local"),
 }));

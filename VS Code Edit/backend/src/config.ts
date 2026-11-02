@@ -36,12 +36,15 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
   if (localDocker && !localMode) {
     throw new Error("KUDU_LOCAL_DOCKER requires KUDU_LOCAL_MODE=true.");
   }
+  if (localDocker && localDesktop) {
+    throw new Error("Desktop Local and Docker Local modes cannot be enabled together.");
+  }
   const isProduction = environment.NODE_ENV?.trim().toLowerCase() === "production";
   if (localMode && isProduction && !localDesktop) {
     throw new Error("KUDU_LOCAL_MODE is only available outside production.");
   }
 
-  const databaseUrl = environment.DATABASE_URL?.trim();
+  const databaseUrl = localMode ? undefined : environment.DATABASE_URL?.trim();
   if (!databaseUrl && !localMode) {
     throw new Error("DATABASE_URL is required. Copy .env.example to .env and configure it.");
   }

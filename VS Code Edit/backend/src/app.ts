@@ -68,7 +68,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       typeof error === "object" && error !== null && "code" in error
         ? (error as NodeJS.ErrnoException).code
         : undefined;
-    if (databaseErrorCode === "23505") {
+    if (databaseErrorCode === "23505" || databaseErrorCode === "SQLITE_CONSTRAINT_UNIQUE" || databaseErrorCode === "SQLITE_CONSTRAINT_PRIMARYKEY") {
       return reply.code(409).send({
         error: {
           code: "DUPLICATE_KEY",
@@ -76,7 +76,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         },
       });
     }
-    if (databaseErrorCode === "23503") {
+    if (databaseErrorCode === "23503" || databaseErrorCode === "SQLITE_CONSTRAINT_FOREIGNKEY" || databaseErrorCode === "SQLITE_CONSTRAINT_TRIGGER") {
       return reply.code(409).send({
         error: {
           code: "REFERENCED_RECORD",
@@ -84,13 +84,18 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         },
       });
     }
-    if (databaseErrorCode === "23514") {
+    if (databaseErrorCode === "23514" || databaseErrorCode === "SQLITE_CONSTRAINT_CHECK" || databaseErrorCode === "SQLITE_CONSTRAINT_NOTNULL") {
       return reply.code(400).send({
         error: {
           code: "INVALID_RECORD",
           message: "The record does not meet the data constraints.",
         },
       });
+    }
+    if (databaseErrorCode === "SQLITE_BUSY" || databaseErrorCode === "SQLITE_LOCKED") {
+      return reply.code(503).send({ error: {
+        code: "DATABASE_BUSY", message: "The local database is busy. Retry the operation shortly.",
+      } });
     }
     const statusCode =
       typeof error === "object" && error !== null && "statusCode" in error
@@ -152,6 +157,25 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     localDocker: options.localDocker,
   });
   if (options.localMode && options.localDatabase) {
+    const manager = options.localDatabase;
+    const mutations = new WeakSet<object>();
+    const complete = (request: object) => {
+      if (mutations.delete(request)) manager.endMutation();
+    };
+    app.addHook("onRequest", async (request, reply) => {
+      if (["GET", "HEAD", "OPTIONS"].includes(request.method) ||
+          request.url.split("?")[0] === "/api/v1/local/database/restore") return;
+      if (!manager.tryBeginMutation()) {
+        return reply.code(503).send({ error: { code: "DATABASE_MAINTENANCE", message: "A database restore is in progress. Retry after it finishes." } });
+      }
+      mutations.add(request);
+    });
+    app.addHook("onSend", async (request, _reply, payload) => {
+      complete(request);
+      return payload;
+    });
+    app.addHook("onResponse", async request => complete(request));
+    app.addHook("onError", async request => complete(request));
     registerLocalDatabaseRoutes(app, options.localDatabase);
   }
   registerRegistryRoutes(app, options.db);

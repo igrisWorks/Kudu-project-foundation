@@ -3,7 +3,7 @@ import type { HealthResponse } from "@kudu/shared";
 import { getHealth } from "../api";
 import { displayError, formatDate, StatusBadge } from "../components/RegistryUI";
 
-export default function HomePage() {
+export default function HomePage({ localMode = false }: { localMode?: boolean }) {
   const [connection, setConnection] = useState<
     { kind: "loading" } | { kind: "ready"; health: HealthResponse } | { kind: "error"; message: string }
   >({ kind: "loading" });
@@ -36,7 +36,7 @@ export default function HomePage() {
       </div>
       <div className="service-row">
         <div className="service-icon database-icon" aria-hidden="true"><span /><span /><span /></div>
-        <div className="service-name"><strong>PostgreSQL</strong><span>Local data store</span></div>
+        <div className="service-name"><strong>{localMode ? "SQLite" : "PostgreSQL"}</strong><span>{localMode ? "Embedded local data store" : "Server data store"}</span></div>
         <StatusBadge state={connection.kind === "loading" ? "checking" : connection.kind === "error" ? "unknown" : dbReady ? "online" : "offline"} />
       </div>
       <div className="panel-footer" aria-live="polite" data-testid="health-result">
@@ -50,6 +50,6 @@ export default function HomePage() {
       <div className="scope-tag">ON-PREMISES BY DESIGN</div>
     </section>
     {connection.kind === "error" && <p className="error-note" role="status">Start the API, then check again. No sample data is being shown.</p>}
-    {connection.kind === "ready" && !dbReady && <p className="error-note" role="status">Start PostgreSQL, then check again. No sample data is being shown.</p>}
+    {connection.kind === "ready" && !dbReady && <p className="error-note" role="status">{localMode ? "The local database is unavailable. Inspect the application log; do not delete the database file." : "Start PostgreSQL, then check again."} No sample data is being shown.</p>}
   </main>;
 }

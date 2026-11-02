@@ -26,32 +26,24 @@ import type {
   RestSyncResult,
 } from "@kudu/shared";
 
-export interface LocalDatabaseForm {
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  password?: string;
-  ssl: boolean;
+export interface LocalDatabaseResponse {
+  engine: "SQLite";
+  connected: boolean;
+  filePath: string;
+  dataDirectory: string;
+  backupsDirectory: string;
+  sqliteVersion: string;
+  schemaVersion: string;
+  migrationState: "current";
+  integrity: "ok";
+  lastSuccessfulInitialization: string | null;
 }
 
-export interface LocalDatabaseResponse {
-  settings: {
-    host: string;
-    port: number;
-    database: string;
-    username: string;
-    ssl: boolean;
-    passwordConfigured: boolean;
-  };
-  status: {
-    configured: boolean;
-    connected: boolean;
-    migrationState: "not_configured" | "unavailable" | "not_initialized" | "current" | "pending";
-    pendingMigrations: string[];
-    checkedAt: string;
-    error?: string;
-  };
+export interface LocalDatabaseBackup {
+  fileName: string;
+  filePath: string;
+  sizeBytes: number;
+  createdAt: string;
 }
 
 let csrfToken: string | null = null;
@@ -151,24 +143,21 @@ export function getLocalDatabase(): Promise<LocalDatabaseResponse> {
   return request("/api/v1/local/database");
 }
 
-export function testLocalDatabase(input: LocalDatabaseForm): Promise<{ connected: boolean; message: string }> {
-  return request("/api/v1/local/database/test", { method: "POST", body: JSON.stringify(input) });
+export function listLocalDatabaseBackups(): Promise<{ items: LocalDatabaseBackup[] }> {
+  return request("/api/v1/local/database/backups");
 }
 
-export function saveLocalDatabase(input: LocalDatabaseForm): Promise<LocalDatabaseResponse> {
-  return request("/api/v1/local/database/save", { method: "POST", body: JSON.stringify(input) });
+export function createLocalDatabaseBackup(): Promise<{ backup: LocalDatabaseBackup }> {
+  return request("/api/v1/local/database/backups", { method: "POST" });
 }
 
-export function initializeLocalDatabase(input: LocalDatabaseForm & {
-  adminUsername: string;
-  adminPassword: string;
-  confirm: true;
-}): Promise<LocalDatabaseResponse> {
-  return request("/api/v1/local/database/initialize", { method: "POST", body: JSON.stringify(input) });
-}
-
-export function migrateLocalDatabase(): Promise<LocalDatabaseResponse & { applied: string[] }> {
-  return request("/api/v1/local/database/migrate", { method: "POST", body: JSON.stringify({}) });
+export function restoreLocalDatabaseBackup(backupName: string): Promise<{
+  status: LocalDatabaseResponse;
+  safetyBackup: LocalDatabaseBackup;
+}> {
+  return request("/api/v1/local/database/restore", {
+    method: "POST", body: JSON.stringify({ backupName, confirm: true }),
+  });
 }
 
 export async function login(password: string): Promise<AuthSessionResponse> {

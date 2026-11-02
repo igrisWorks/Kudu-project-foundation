@@ -5,6 +5,9 @@ import { Pool } from "pg";
 import { createApp } from "./app.js";
 import type { Database } from "./database.js";
 import { LocalDatabaseManager } from "./local-database.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function unusedDatabase(): Kysely<Database> {
   return new Kysely<Database>({
@@ -55,7 +58,8 @@ test("health endpoint returns a safe degraded response when the database is down
 
 test("local edition session is authenticated without operator credentials and writes require local origin", async context => {
   const db = unusedDatabase();
-  const localDatabase = await LocalDatabaseManager.create();
+  const directory = await mkdtemp(join(tmpdir(), "kuduns-local-origin-"));
+  const localDatabase = await LocalDatabaseManager.create(directory);
   const app = await createApp({
     db,
     localMode: true,
@@ -68,6 +72,7 @@ test("local edition session is authenticated without operator credentials and wr
     await app.close();
     await localDatabase.close();
     await db.destroy();
+    await rm(directory, { recursive: true, force: true });
   });
   app.get("/api/v1/local-test", async () => ({ permitted: true }));
 
@@ -97,20 +102,21 @@ test("local edition session is authenticated without operator credentials and wr
     headers: { host: "127.0.0.1:3000" },
   });
   assert.equal(settingsResponse.statusCode, 200);
-  assert.equal("password" in settingsResponse.json().settings, false);
-  assert.equal(settingsResponse.json().status.connected, false);
+  assert.equal("password" in settingsResponse.json(), false);
+  assert.equal(settingsResponse.json().engine, "SQLite");
+  assert.equal(settingsResponse.json().connected, true);
 
   const unauthorizedInitialize = await app.inject({
     method: "POST",
-    url: "/api/v1/local/database/initialize",
+    url: "/api/v1/local/database/restore",
     headers: {
       host: "127.0.0.1:3000",
       origin: "http://127.0.0.1:5173",
     },
-    payload: { adminUsername: "postgres", adminPassword: "admin-secret", confirm: false },
+    payload: { backupName: "not-selected.db", confirm: false },
   });
   assert.equal(unauthorizedInitialize.statusCode, 400);
-  assert.equal(JSON.stringify(unauthorizedInitialize.json()).includes("admin-secret"), false);
+  assert.equal(JSON.stringify(unauthorizedInitialize.json()).includes("adminPassword"), false);
 
   const crossOriginWrite = await app.inject({
     method: "POST",

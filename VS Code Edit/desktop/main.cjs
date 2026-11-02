@@ -1,7 +1,8 @@
 "use strict";
 
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, session, shell, utilityProcess } = require("electron");
+const { startLocalRuntime } = require("./local-runtime.cjs");
 const {
   isSameOrigin,
   isSandboxDisabledByArgs,
@@ -26,6 +27,12 @@ const REMOTE_CSP = [
 let connectionWindow = null;
 let serverWindow = null;
 let activeServerOrigin = null;
+let localRuntime = null;
+let startingLocal = false;
+let quittingLocal = false;
+let ownedLocalProcess = null;
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 
 function rendererFile() {
   return app.isPackaged
@@ -55,8 +62,8 @@ function installServerContentPolicy(serverSession) {
   );
 }
 
-function createServerWindow(origin) {
-  const serverSession = session.fromPartition("persist:kuduns-server");
+function createServerWindow(origin, local = false) {
+  const serverSession = session.fromPartition(local ? "persist:kuduns-local" : "persist:kuduns-server");
   activeServerOrigin = origin;
   installServerContentPolicy(serverSession);
 
@@ -75,6 +82,7 @@ function createServerWindow(origin) {
       webSecurity: true,
       allowRunningInsecureContent: false,
       devTools: !app.isPackaged,
+      ...(local ? { preload: path.join(__dirname, "local-preload.cjs") } : {}),
     },
   });
 
@@ -138,14 +146,47 @@ function registerConnectionIpc() {
       return { enabled: false, message: "Local mode is unavailable in this build.", prerequisites: [] };
     }
     return {
-      enabled: false,
-      message: "Local mode is not ready. This build does not start, adopt, or stop a backend process.",
-      prerequisites: [
-        "PostgreSQL must be installed and managed separately.",
-        "Backend database and authentication settings must be provisioned outside the desktop.",
-        "A safe packaged backend process manager is not included in this milestone.",
-      ],
+      enabled: true,
+      message: "Local mode manages an embedded SQLite database on this computer. No PostgreSQL or operator login is required.",
+      prerequisites: [],
     };
+  });
+
+  ipcMain.handle("desktop:start-local", async event => {
+    if (!connectionWindow || event.sender !== connectionWindow.webContents || startingLocal) {
+      return { status: "error", message: "Local startup is not available." };
+    }
+    startingLocal = true;
+    try {
+      localRuntime = await startLocalRuntime(app, utilityProcess, child => {
+        ownedLocalProcess = child;
+        child.once("exit", () => { ownedLocalProcess = null; });
+      });
+      const window = createServerWindow(localRuntime.origin, true);
+      await window.loadURL(localRuntime.origin);
+      serverWindow = window;
+      window.show();
+      connectionWindow.close();
+      connectionWindow = null;
+      localRuntime.child.once("exit", () => {
+        localRuntime = null;
+        if (!quittingLocal) {
+          dialog.showErrorBox("KuduNS Local stopped", "The local backend stopped. Inspect local-runtime.log in the application data folder. Your database has not been deleted.");
+          app.quit();
+        }
+      });
+      return { status: "connected" };
+    } catch (error) {
+      localRuntime?.child.kill();
+      localRuntime = null;
+      return { status: "error", message: error instanceof Error ? error.message : "Local startup failed." };
+    } finally { startingLocal = false; }
+  });
+  ipcMain.handle("desktop:reveal-local-data", async event => {
+    if (!localRuntime || !serverWindow || event.sender !== serverWindow.webContents ||
+        !isSameOrigin(event.senderFrame?.url, localRuntime.origin)) throw new Error("Local action unavailable.");
+    const error = await shell.openPath(localRuntime.dataDirectory);
+    if (error) throw new Error("The data folder could not be opened.");
   });
 
   ipcMain.handle("desktop:connect-server", async (event, request) => {
@@ -215,6 +256,7 @@ function registerConnectionIpc() {
 }
 
 app.whenReady().then(async () => {
+  if (!primaryInstance) return;
   const runningAsRoot = process.platform === "linux"
     && typeof process.getuid === "function"
     && process.getuid() === 0;
@@ -238,4 +280,19 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   app.quit();
+});
+
+app.on("before-quit", event => {
+  if (!ownedLocalProcess || quittingLocal) return;
+  event.preventDefault();
+  quittingLocal = true;
+  const child = ownedLocalProcess;
+  child.once("exit", () => { localRuntime = null; app.quit(); });
+  child.kill();
+  setTimeout(() => app.exit(0), 5000).unref();
+});
+
+app.on("second-instance", () => {
+  const window = serverWindow ?? connectionWindow;
+  if (window) { if (window.isMinimized()) window.restore(); window.focus(); }
 });
