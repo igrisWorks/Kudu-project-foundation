@@ -108,6 +108,28 @@ function mappingRecordFailure(message: string, fields?: Record<string, string>):
   return new ApiFailure(400, "INVALID_IMPORT_RECORD", message, fields);
 }
 
+export function normalizeOccurrenceTimestamp(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = Math.abs(value) < 100_000_000_000 ? value * 1000 : value;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  }
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const input = value.trim();
+  if (/^-?\d{9,16}$/.test(input)) {
+    const epoch = Number(input);
+    const date = new Date(Math.abs(epoch) < 100_000_000_000 ? epoch * 1000 : epoch);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2}|(?:UTC|GMT))$/i.test(input);
+  if (!hasTimezone || Number.isNaN(Date.parse(input))) return undefined;
+  // Preserve RFC 3339 text (including sub-millisecond precision); normalize other
+  // explicitly zoned common date formats to a value accepted by event ingestion.
+  if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(input)) return input;
+  const date = new Date(input);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
 export async function normalizeMappedEvent(
   db: Kysely<Database>,
   sourceId: string,
@@ -125,9 +147,10 @@ export async function normalizeMappedEvent(
       eventType: `Provide a value in the mapped source field ${definition.eventType}.`,
     });
   }
-  if (typeof occurredAt !== "string" || !occurredAt.trim()) {
-    throw mappingRecordFailure("The mapped occurrence timestamp is missing or is not a non-empty string.", {
-      occurredAt: `Provide a value in the mapped source field ${definition.occurredAt}.`,
+  const normalizedOccurredAt = normalizeOccurrenceTimestamp(occurredAt);
+  if (!normalizedOccurredAt) {
+    throw mappingRecordFailure("The mapped occurrence timestamp is missing or invalid.", {
+      occurredAt: `Provide a valid date/time or Unix timestamp in ${definition.occurredAt}.`,
     });
   }
 
@@ -135,12 +158,12 @@ export async function normalizeMappedEvent(
   if (definition.sourceRecordId) {
     const value = readMappedField(rawRecord, definition.sourceRecordId);
     if (value !== undefined && value !== null && value !== "") {
-      if (typeof value !== "string") {
+      if (typeof value !== "string" && !(typeof value === "number" && Number.isFinite(value))) {
         throw mappingRecordFailure("The mapped source-record ID must be a string.", {
           sourceRecordId: "Provide a string value or leave the field blank.",
         });
       }
-      sourceRecordId = value;
+      sourceRecordId = String(value);
     }
   }
 
@@ -148,7 +171,7 @@ export async function normalizeMappedEvent(
   if (definition.assetKey) {
     const value = readMappedField(rawRecord, definition.assetKey);
     if (value !== undefined && value !== null && value !== "") {
-      if (typeof value !== "string") {
+      if (typeof value !== "string" && !(typeof value === "number" && Number.isFinite(value))) {
         throw mappingRecordFailure("The mapped asset key must be a string.", {
           assetKey: "Provide an exact registered asset key or leave the field blank.",
         });
@@ -156,7 +179,7 @@ export async function normalizeMappedEvent(
       const asset = await db
         .selectFrom("assets")
         .select(["id", "archived_at"])
-        .where("asset_key", "=", value)
+        .where("asset_key", "=", String(value))
         .executeTakeFirst();
       if (!asset || asset.archived_at !== null) {
         throw mappingRecordFailure("The mapped asset key does not identify an active registered asset.", {
@@ -191,8 +214,8 @@ export async function normalizeMappedEvent(
   return {
     sourceId,
     eventType,
-    occurredAt,
-    sourceTimestamp: occurredAt,
+    occurredAt: normalizedOccurredAt,
+    sourceTimestamp: typeof occurredAt === "string" ? occurredAt : String(occurredAt),
     ...(assetId ? { assetId } : {}),
     ...(sourceRecordId !== undefined ? { sourceRecordId } : {}),
     deduplicationKey: sourceRecordId?.trim() ? sourceRecordId : fallbackDeduplicationKey,

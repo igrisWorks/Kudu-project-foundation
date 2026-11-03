@@ -16,6 +16,7 @@ import type { Kysely } from "kysely";
 import { AuthManager, registerAuthenticationGuard, registerAuthRoutes, type AuthConfiguration } from "./auth.js";
 import { registerLocalDatabaseRoutes } from "./local-database-routes.js";
 import type { LocalDatabaseManager } from "./local-database.js";
+import { registerDataDiscoveryRoutes } from "./data-discovery.js";
 
 interface AppOptions {
   db: Kysely<Database>;
@@ -191,6 +192,10 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     options.importDirectory ?? process.env.KUDU_IMPORT_DIRECTORY ?? "imports",
   );
   registerFileImportRoutes(app, options.db, importDirectory);
+  registerDataDiscoveryRoutes(app, options.db, importDirectory, {
+    trustedHosts: options.restTrustedHosts,
+    allowLoopbackForTests: options.allowLoopbackRestTests === true,
+  });
 
   if (options.staticDirectory) {
     try {

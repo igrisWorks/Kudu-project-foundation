@@ -106,7 +106,7 @@ export type DataSourceConfigurationInput =
       responseFormat?: "json";
       recordsPath?: string;
     }
-  | { kind: "json_file"; relativePath: string }
+  | { kind: "json_file"; relativePath: string; recordsPath?: string }
   | { kind: "csv_file"; relativePath: string }
   | { kind: "manual" };
 
@@ -124,7 +124,7 @@ export type DataSourceConfigurationMetadata =
       responseFormat?: "json";
       recordsPath?: string;
     }
-  | { kind: "json_file"; relativePath: string }
+  | { kind: "json_file"; relativePath: string; recordsPath?: string }
   | { kind: "csv_file"; relativePath: string }
   | { kind: "manual"; referenceOnly: true };
 
@@ -142,6 +142,52 @@ export interface DataSourceRecord {
   lastErrorSummary: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type DiscoveredValueType = "string" | "number" | "boolean" | "datetime" | "object" | "array" | "mixed" | "unknown";
+export type MappingConfidence = "high" | "medium" | "low";
+export type SuggestedTargetField = "eventType" | "occurredAt" | "sourceRecordId" | "assetKey" | "message" | "severity" | "errorCode";
+
+export interface DiscoveredField {
+  path: string;
+  valueType: DiscoveredValueType;
+  examples: string[];
+}
+
+export interface DiscoveryRecordPath {
+  path: string;
+  recordCount: number;
+  supported: boolean;
+}
+
+export interface SuggestedFieldMapping {
+  target: SuggestedTargetField;
+  sourcePath: string | null;
+  confidence: MappingConfidence;
+  confidenceScore: number;
+  required: boolean;
+  ambiguous: boolean;
+  alternatives: string[];
+  examples: string[];
+  note: string;
+}
+
+export interface DiscoveryPreviewRecord {
+  recordNumber: number;
+  state: "valid" | "warning" | "rejected";
+  issues: string[];
+  values: Record<string, string>;
+  normalized: Record<string, string>;
+}
+
+export interface DataSourceDiscoveryResult {
+  sourceType: "rest_api" | "json_file" | "csv_file";
+  recordPaths: DiscoveryRecordPath[];
+  selectedRecordPath: string | null;
+  fields: DiscoveredField[];
+  suggestions: SuggestedFieldMapping[];
+  preview: DiscoveryPreviewRecord[];
+  warnings: string[];
 }
 
 export interface DataSourceCreateInput {

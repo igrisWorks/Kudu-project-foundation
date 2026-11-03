@@ -1,14 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page, type RestApiAuthMode, type RestSyncResult } from "@kudu/shared";
-import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, syncRestDataSource, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
+import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceDiscoveryResult, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page, type RestApiAuthMode, type RestSyncResult, type SuggestedTargetField } from "@kudu/shared";
+import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, discoverDataSource, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, syncRestDataSource, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
 import { ConnectorBadge, displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
 const PAGE_SIZE = 15;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sourceLabels: Record<DataSourceType, string> = {
   rest_api: "REST API", json_file: "JSON file", csv_file: "CSV file", manual: "Manual",
+};
+const suggestionLabels: Record<SuggestedTargetField, string> = {
+  eventType: "Event type",
+  occurredAt: "Occurrence time",
+  sourceRecordId: "Source record ID",
+  assetKey: "Asset identifier",
+  message: "Message",
+  severity: "Severity",
+  errorCode: "Error code",
 };
 
 function mapDataSourceErrors(fields: Record<string, string>): Record<string, string> {
@@ -71,7 +80,9 @@ function DataSourceListPage() {
 
 function DataSourceDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
-  const requestedNamespaceAssetId = new URLSearchParams(window.location.search).get("namespaceAssetId");
+  const detailSearch = new URLSearchParams(window.location.search);
+  const requestedNamespaceAssetId = detailSearch.get("namespaceAssetId");
+  const suggestedMappingStatus = detailSearch.get("suggestedMapping");
   const namespaceAssetId = requestedNamespaceAssetId && UUID_PATTERN.test(requestedNamespaceAssetId)
     ? requestedNamespaceAssetId
     : null;
@@ -128,6 +139,15 @@ function DataSourceDetailPage() {
           ? <><strong>REST sync is read-only and on demand.</strong> Kudu sends a bounded GET request only when you select Sync now. No source is polled or scheduled.</>
           : <><strong>Manual source.</strong> This reference record does not connect or start ingestion.</>}
     </div>
+    {cfg.kind === "json_file" && cfg.recordsPath && <div className="notice">
+      <strong>Nested JSON collection selected.</strong> Import requires an active event mapping. Discovery and draft creation do not activate it.
+    </div>}
+    {suggestedMappingStatus === "failed" && <div className="notice error" role="status" data-testid="notice-suggested-mapping">
+      The source was saved, but its suggested mapping draft could not be saved. Review or create a draft in Event mapping.
+    </div>}
+    {suggestedMappingStatus === "incomplete" && <div className="notice" role="status" data-testid="notice-suggested-mapping">
+      The source was saved. Discovery did not provide both required event fields, so no mapping draft was created. Add them in Event mapping.
+    </div>}
     {importError && <div className="notice error" role="alert" data-testid="error-file-import"><strong>Import failed.</strong> {importError}</div>}
     {syncError && <div className="notice error" role="alert" data-testid="error-rest-sync"><strong>Sync could not run.</strong> {syncError}</div>}
     {importResult && <section className="panel file-import-result" data-testid="panel-file-import-result">
@@ -177,7 +197,7 @@ function DataSourceDetailPage() {
               : cfg.credentialConfigured ? "No authentication; an inactive credential reference is recorded." : "None."}</dd>
             <dt>Request limits</dt><dd>{cfg.timeoutMs ?? 10000} ms · {((cfg.maxResponseBytes ?? 1048576) / 1048576).toFixed(1)} MiB · {cfg.maxRecords ?? 500} records</dd>
           </>}
-          {(cfg.kind === "json_file" || cfg.kind === "csv_file") && <><dt>Relative path</dt><dd className="mono" data-testid="text-source-path">{cfg.relativePath}</dd></>}
+          {(cfg.kind === "json_file" || cfg.kind === "csv_file") && <><dt>Relative path</dt><dd className="mono" data-testid="text-source-path">{cfg.relativePath}</dd>{cfg.kind === "json_file" && <><dt>Records path</dt><dd className="mono">{cfg.recordsPath || "Top-level JSON array"}</dd></>}</>}
           {cfg.kind === "manual" && <><dt>Reference</dt><dd>{cfg.referenceOnly ? "Manual reference only" : "Not available"}</dd></>}
         </dl></section>
         {fileFormat
@@ -379,6 +399,151 @@ function EventMappingPanel({ sourceId, restSource = false }: { sourceId: string;
   </section>;
 }
 
+function DiscoveryReview({
+  result,
+  selectedPath,
+  onSelectPath,
+  mappingPaths,
+  onChangeMappingPath,
+}: {
+  result: DataSourceDiscoveryResult;
+  selectedPath: string;
+  onSelectPath: (path: string) => void;
+  mappingPaths: Record<string, string>;
+  onChangeMappingPath: (target: SuggestedTargetField, path: string) => void;
+}) {
+  const selected = result.recordPaths.find(item => item.path === selectedPath);
+  const suggestedPaths = Object.fromEntries(result.suggestions.map(item => [item.target, item.sourcePath ?? ""]));
+  const usable = (value: string | undefined) => Boolean(value && value !== "(missing)" && value !== "[hidden]" && value !== "[object]" && value !== "null" && !value.startsWith("[array:"));
+  const fieldTypes = new Map(result.fields.map(field => [field.path, field.valueType]));
+  const timestampToUtc = (value: string | undefined) => {
+    if (!usable(value)) return undefined;
+    if (/^-?\d{9,16}$/.test(value!)) {
+      const epoch = Number(value);
+      const date = new Date(Math.abs(epoch) < 100_000_000_000 ? epoch * 1000 : epoch);
+      return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+    }
+    if (!/(?:Z|[+-]\d{2}:?\d{2}|(?:UTC|GMT))$/i.test(value!)) return undefined;
+    const date = new Date(value!);
+    if (Number.isNaN(date.getTime())) return undefined;
+    return /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(value!) ? value! : date.toISOString();
+  };
+  const duplicateSourceIds = new Set<string>();
+  const sourceIdCounts = new Map<string, number>();
+  for (const row of result.preview) {
+    const path = mappingPaths.sourceRecordId;
+    const value = path ? row.values[path] : undefined;
+    if (usable(value)) sourceIdCounts.set(value!, (sourceIdCounts.get(value!) ?? 0) + 1);
+  }
+  for (const [value, count] of sourceIdCounts) if (count > 1) duplicateSourceIds.add(value);
+  const previewFor = (row: DataSourceDiscoveryResult["preview"][number]) => {
+    const values: Record<string, string> = {};
+    const issues = row.issues.filter(issue =>
+      !/Choose a source for required|must be a non-empty string|not a supported date|source record ID repeats|Suggested asset identifier does not match/i.test(issue),
+    );
+    let invalid = false;
+    const eventPath = mappingPaths.eventType;
+    const eventType = eventPath ? row.values[eventPath] : undefined;
+    if (!eventPath) issues.push("Choose a source for required Event type.");
+    else if (
+      !usable(eventType) ||
+      (eventPath === suggestedPaths.eventType && row.issues.some(issue => issue.startsWith("Event type must"))) ||
+      ["number", "boolean", "object", "array", "mixed", "unknown"].includes(fieldTypes.get(eventPath) ?? "")
+    ) {
+      issues.push("Event type must be a non-empty string in every sampled record."); invalid = true;
+    }
+    else values.eventType = eventType!;
+    const timePath = mappingPaths.occurredAt;
+    const occurredAt = timePath ? timestampToUtc(row.values[timePath]) : undefined;
+    if (!timePath) issues.push("Choose a source for required Occurrence time.");
+    else if (!occurredAt) { issues.push("Occurrence time needs a timezone or a valid Unix timestamp."); invalid = true; }
+    else values.occurredAt = occurredAt;
+    const sourceIdPath = mappingPaths.sourceRecordId;
+    const sourceId = sourceIdPath ? row.values[sourceIdPath] : undefined;
+    if (usable(sourceId)) {
+      values.sourceRecordId = sourceId!;
+      if (duplicateSourceIds.has(sourceId!)) issues.push("This source record ID repeats in the preview; imports will be deduplicated.");
+    } else if (sourceIdPath && sourceId !== "(missing)" && sourceId !== undefined && sourceId !== "null") {
+      issues.push("Source record ID must be a string or finite number."); invalid = true;
+    }
+    const assetPath = mappingPaths.assetKey;
+    const originalAssetPath = suggestedPaths.assetKey;
+    const assetValue = assetPath ? row.values[assetPath] : undefined;
+    if (usable(assetValue) && assetPath) {
+      values.assetKey = assetValue!;
+      if (assetPath !== originalAssetPath) issues.push("This corrected asset field has not been matched. Only exact active asset keys are associated.");
+      else if (row.issues.some(issue => issue.startsWith("Suggested asset identifier does not match"))) {
+        issues.push("Suggested asset identifier does not match an active registered KuduNS asset key.");
+        invalid = true;
+      }
+    } else if (assetPath && assetValue !== "(missing)" && assetValue !== undefined && assetValue !== "null") {
+      issues.push("Asset key must be a string or finite number."); invalid = true;
+    }
+    for (const target of ["message", "severity", "errorCode"] as const) {
+      const path = mappingPaths[target];
+      const value = path ? row.values[path] : undefined;
+      if (path && value === "(missing)") { issues.push(`Mapped ${target} field is missing.`); invalid = true; }
+      else if (value && value !== "[hidden]") values[target] = value;
+    }
+    return {
+      values,
+      issues,
+      state: invalid ? "rejected" as const : issues.length ? "warning" as const : "valid" as const,
+    };
+  };
+  return <section className="panel discovery-review" aria-labelledby="discovery-review-title" data-testid="panel-discovery-review">
+    <div className="panel-heading-row">
+      <div>
+        <h2 className="panel-title" id="discovery-review-title">Discovery preview</h2>
+        <p className="field-hint">Choose the record collection, review examples, then accept, change, or exclude each suggestion. Nothing is imported by discovery.</p>
+      </div>
+      <span className="status-pill">{result.sourceType.replace("_", " ").toUpperCase()}</span>
+    </div>
+    <label className="field"><span>Record collection</span>
+      <select value={selectedPath} onChange={event => onSelectPath(event.target.value)} data-testid="select-discovery-record-path">
+        <option value="">Choose a record collection</option>
+        {result.recordPaths.map(item => <option key={item.path} value={item.path} disabled={!item.supported}>
+          {item.path === "$" ? "Top-level array" : item.path} · {item.recordCount} records{item.supported ? "" : " · unsupported path"}
+        </option>)}
+      </select>
+    </label>
+    {result.warnings.map((warning, index) => <p className="field-hint" key={`${index}-${warning}`} data-testid="text-discovery-warning">{warning}</p>)}
+    {selected && result.fields.length > 0 && <>
+      <div className="table-frame discovery-fields"><table>
+        <thead><tr><th>Mapping target</th><th>Source field</th><th>Confidence</th><th>Examples and review note</th></tr></thead>
+        <tbody>{result.suggestions.map(suggestion => <tr key={suggestion.target}>
+          <td>{suggestionLabels[suggestion.target]}{suggestion.required ? " · required" : ""}</td>
+          <td><select
+            value={mappingPaths[suggestion.target] ?? ""}
+            onChange={event => onChangeMappingPath(suggestion.target, event.target.value)}
+            aria-label={`${suggestionLabels[suggestion.target]} source field`}
+            data-testid={`select-discovery-map-${suggestion.target}`}
+          >
+            <option value="">Do not map</option>
+            {suggestion.alternatives.map(path => <option value={path} key={path}>{path}</option>)}
+            {result.fields.filter(field => !suggestion.alternatives.includes(field.path)).map(field => <option value={field.path} key={field.path}>{field.path}</option>)}
+          </select></td>
+          <td><span className={`status-pill ${suggestion.confidence === "high" ? "good" : ""}`}>{suggestion.confidence} · {Math.round(suggestion.confidenceScore * 100)}%</span>{suggestion.ambiguous && <p className="field-hint">Ambiguous</p>}</td>
+          <td>{suggestion.examples.join(" · ") || <span className="muted">No example</span>}<p className="field-hint">{suggestion.note}</p></td>
+        </tr>)}</tbody>
+      </table></div>
+      <div className="discovery-preview-records" data-testid="list-discovery-preview-records">
+        <h3>Sample records · first {result.preview.length} of {selected.recordCount}</h3>
+        {result.preview.map(row => {
+          const preview = previewFor(row);
+          return <article className="discovery-preview-record" key={row.recordNumber}>
+          <div><strong>Record {row.recordNumber}</strong> <span className={`status-pill ${preview.state === "valid" ? "good" : preview.state === "rejected" ? "bad" : "warn"}`}>{preview.state.toUpperCase()}</span></div>
+          {preview.issues.length > 0 && <ul>{preview.issues.map((issue, index) => <li key={`${row.recordNumber}-${index}`}>{issue}</li>)}</ul>}
+          <dl>{Object.entries(row.values).slice(0, 8).map(([path, value]) => <div key={path}><dt>{path}</dt><dd>{value}</dd></div>)}</dl>
+          {Object.keys(preview.values).length > 0 && <><p className="field-hint">Proposed normalized event</p><dl>{Object.entries(preview.values).map(([field, value]) => <div key={field}><dt>{field}</dt><dd>{value}</dd></div>)}</dl></>}
+        </article>;
+        })}
+      </div>
+      <p className="field-hint">Fields not mapped here remain in the event payload. A discovered mapping is saved as a draft and never activated automatically.</p>
+    </>}
+  </section>;
+}
+
 function DataSourceFormPage({ editing }: { editing: boolean }) {
   const { id = "" } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -396,6 +561,88 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [validation, setValidation] = useState("");
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [discovery, setDiscovery] = useState<DataSourceDiscoveryResult | null>(null);
+  const [selectedRecordPath, setSelectedRecordPath] = useState("");
+  const [mappingPaths, setMappingPaths] = useState<Record<string, string>>({});
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState("");
+  const [discoveryConfigurationKey, setDiscoveryConfigurationKey] = useState("");
+  function clearDiscovery() {
+    setDiscovery(null);
+    setSelectedRecordPath("");
+    setMappingPaths({});
+    setDiscoveryError("");
+    setDiscoveryConfigurationKey("");
+  }
+  function changeConfiguration(setter: (value: string) => void, value: string) {
+    setter(value);
+    clearDiscovery();
+  }
+  function configurationFromForm(): DataSourceConfigurationInput {
+    if (type === "rest_api") {
+      const credential: { credentialRef?: string | null } = {};
+      if (clearCredential) credential.credentialRef = null;
+      else if (credentialRef.trim()) credential.credentialRef = credentialRef.trim();
+      return {
+        kind: "rest_api",
+        baseUrl: baseUrl.trim(),
+        endpointPath: endpointPath.trim(),
+        method: "GET",
+        authMode,
+        timeoutMs: Number(timeoutMs),
+        maxResponseBytes: Number(maxResponseBytes),
+        maxRecords: Number(maxRecords),
+        responseFormat: "json",
+        recordsPath: recordsPath.trim(),
+        ...credential,
+      };
+    }
+    if (type === "json_file") {
+      return { kind: "json_file", relativePath: relativePath.trim(), ...(recordsPath.trim() ? { recordsPath: recordsPath.trim() } : {}) };
+    }
+    if (type === "csv_file") return { kind: "csv_file", relativePath: relativePath.trim() };
+    return { kind: "manual" };
+  }
+  async function runDiscovery() {
+    setDiscoveryError("");
+    if (type === "manual" || !validate()) return;
+    setDiscoveryBusy(true);
+    try {
+      const configuration = configurationFromForm();
+      const result = await discoverDataSource(type, configuration, selectedRecordPath || undefined);
+      const chosenPath = result.selectedRecordPath ?? "";
+      setSelectedRecordPath(chosenPath);
+      setMappingPaths(Object.fromEntries(result.suggestions.map(suggestion => [suggestion.target, suggestion.sourcePath ?? ""])));
+      let confirmedConfiguration = configuration;
+      if (result.selectedRecordPath && (type === "rest_api" || type === "json_file")) {
+        const path = result.selectedRecordPath === "$" ? "" : result.selectedRecordPath;
+        setRecordsPath(path);
+        confirmedConfiguration = type === "rest_api"
+          ? { ...(configuration as Extract<DataSourceConfigurationInput, { kind: "rest_api" }>), recordsPath: path }
+          : { kind: "json_file", relativePath, ...(path ? { recordsPath: path } : {}) };
+      }
+      setDiscoveryConfigurationKey(JSON.stringify(confirmedConfiguration));
+      setDiscovery(result);
+    } catch (cause) {
+      setDiscoveryError(displayError(cause));
+    } finally {
+      setDiscoveryBusy(false);
+    }
+  }
+  function selectDiscoveryPath(path: string) {
+    setSelectedRecordPath(path);
+    setMappingPaths({});
+    setDiscoveryConfigurationKey("");
+    if (type === "rest_api" || type === "json_file") setRecordsPath(path === "$" ? "" : path);
+    setDiscovery(current => current ? {
+      ...current,
+      selectedRecordPath: path || null,
+      fields: [],
+      suggestions: [],
+      preview: [],
+      warnings: path ? ["Run discovery again to preview this collection."] : ["Choose a record collection."],
+    } : current);
+  }
   useEffect(() => {
     if (!editing) { setInitialLoading(false); return; }
     let active = true;
@@ -414,7 +661,11 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         setMaxRecords(String(record.configuration.maxRecords ?? 500));
         setCredentialConfigured(record.configuration.credentialConfigured);
       }
-      if (record.configuration.kind === "json_file" || record.configuration.kind === "csv_file") setRelativePath(record.configuration.relativePath);
+      if (record.configuration.kind === "json_file") {
+        setRelativePath(record.configuration.relativePath);
+        setRecordsPath(record.configuration.recordsPath ?? "");
+      }
+      if (record.configuration.kind === "csv_file") setRelativePath(record.configuration.relativePath);
     }).catch(cause => { if (active) setLoadError(displayError(cause)); }).finally(() => { if (active) setInitialLoading(false); });
     return () => { active = false; };
   }, [editing, id, loadAttempt]);
@@ -442,31 +693,46 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setValidation("");
     if (!validate()) return;
-    let configuration: DataSourceConfigurationInput;
-    if (type === "rest_api") {
-      const credential: { credentialRef?: string | null } = {};
-      if (clearCredential) credential.credentialRef = null;
-      else if (credentialRef.trim()) credential.credentialRef = credentialRef.trim();
-      configuration = {
-        kind: "rest_api",
-        baseUrl: baseUrl.trim(),
-        endpointPath: endpointPath.trim(),
-        method: "GET",
-        authMode,
-        timeoutMs: Number(timeoutMs),
-        maxResponseBytes: Number(maxResponseBytes),
-        maxRecords: Number(maxRecords),
-        responseFormat: "json",
-        recordsPath: recordsPath.trim(),
-        ...credential,
-      };
-    } else if (type === "json_file" || type === "csv_file") configuration = { kind: type, relativePath: relativePath.trim() };
-    else configuration = { kind: "manual" };
+    const configuration = configurationFromForm();
     setBusy(true);
     try {
       const input = { sourceKey: sourceKey.trim(), displayName: displayName.trim(), sourceType: type, description: description.trim() || null, configuration, enabled };
       const saved = editing ? await updateDataSource(id, input) : await createDataSource(input);
-      navigate(`/data-sources/${encodeURIComponent(saved.id)}`);
+      let mappingNotice = "";
+      const discoveryIsCurrent = discovery !== null
+        && discoveryConfigurationKey === JSON.stringify(configuration)
+        && discovery.selectedRecordPath === selectedRecordPath
+        && Boolean(selectedRecordPath);
+      if (discoveryIsCurrent) {
+        const selected = (target: SuggestedTargetField) => mappingPaths[target]?.trim() ?? "";
+        const eventType = selected("eventType");
+        const occurredAt = selected("occurredAt");
+        if (eventType && occurredAt) {
+          const payload: Record<string, string> = {};
+          for (const target of ["message", "severity", "errorCode"] as const) {
+            const path = selected(target);
+            if (path) payload[target] = path;
+          }
+          const definition: EventMappingDefinition = {
+            eventType,
+            occurredAt,
+            ...(selected("sourceRecordId") ? { sourceRecordId: selected("sourceRecordId") } : {}),
+            ...(selected("assetKey") ? { assetKey: selected("assetKey") } : {}),
+            payload,
+          };
+          try {
+            const mappings = await listDataSourceEventMappings(saved.id);
+            const draft = mappings.items.find(mapping => mapping.status === "draft");
+            if (draft) await updateDataSourceEventMapping(saved.id, draft.version, definition);
+            else await createDataSourceEventMapping(saved.id, definition);
+          } catch {
+            mappingNotice = "suggestedMapping=failed";
+          }
+        } else {
+          mappingNotice = "suggestedMapping=incomplete";
+        }
+      }
+      navigate(`/data-sources/${encodeURIComponent(saved.id)}${mappingNotice ? `?${mappingNotice}` : ""}`);
     } catch (cause) {
       setError(displayError(cause));
       setFieldErrors(cause instanceof ApiError ? mapDataSourceErrors(cause.fields ?? {}) : {});
@@ -478,14 +744,14 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
     <div className="detail-heading"><Link href={editing ? `/data-sources/${encodeURIComponent(id)}` : "/data-sources"} className="back-link" data-testid="link-cancel-data-source">← {editing ? "Data source record" : "All data sources"}</Link>
       <PageIntro eyebrow={editing ? "REGISTRY / SOURCE / EDIT" : "REGISTRY / SOURCE / NEW"} title={editing ? "Edit data source" : "Register data source"} description="Record configuration metadata. This workflow does not establish a connection or start ingestion." />
     </div>
-    <div className="notice"><strong>Actions are on demand.</strong> Saving or enabling a REST source does not contact it; only Sync now sends a GET request.</div>
+    <div className="notice"><strong>Actions are on demand.</strong> Saving or enabling a source does not contact it. REST requests occur only after you select Discover &amp; Preview or Sync now; local files are read only after an explicit discovery or import action.</div>
     {error && <div className="notice error" role="alert" data-testid="error-data-source-submit">{error}</div>}
     {validation && <div className="notice error" role="status" data-testid="validation-data-source">{validation}</div>}
     <section className="form-layout"><form className="form-panel" onSubmit={submit} noValidate>
       <div className="form-grid">
         <Field label="Source key" name="source-key" value={sourceKey} onChange={setSourceKey} required hint="A stable identifier for this source." error={fieldErrors.sourceKey} />
         <Field label="Display name" name="source-display-name" value={displayName} onChange={setDisplayName} required error={fieldErrors.displayName} />
-        <div className="field"><label htmlFor="data-source-type">Source type</label><select id="data-source-type" data-testid="select-data-source-type" value={type} onChange={event => { setType(event.target.value as DataSourceType); setFieldErrors({}); setClearCredential(false); }} aria-describedby="source-type-hint">{DATA_SOURCE_TYPES.map(value => <option value={value} key={value}>{sourceLabels[value]}</option>)}</select><span className="field-hint" id="source-type-hint">Changing type replaces the configuration metadata on save.</span></div>
+        <div className="field"><label htmlFor="data-source-type">Source type</label><select id="data-source-type" data-testid="select-data-source-type" value={type} onChange={event => { setType(event.target.value as DataSourceType); setFieldErrors({}); setClearCredential(false); setRecordsPath(""); clearDiscovery(); }} aria-describedby="source-type-hint">{DATA_SOURCE_TYPES.map(value => <option value={value} key={value}>{sourceLabels[value]}</option>)}</select><span className="field-hint" id="source-type-hint">Changing type replaces the configuration metadata on save.</span></div>
         <div className="field"><label className="field-label">Record state</label><label className="check-row"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} data-testid="checkbox-source-enabled" /><span><strong>Enabled</strong><br /><span className="field-hint">Metadata only; no connector is started.</span></span></label></div>
         <div className="field span-2"><label htmlFor="source-description">Description</label><textarea id="source-description" data-testid="input-source-description" value={description} onChange={event => setDescription(event.target.value)} placeholder="Purpose, ownership, or operational context" /></div>
       </div>
@@ -493,19 +759,19 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       {type === "rest_api" && <div className="form-grid">
         <div className="field span-2">
           <label htmlFor="rest-base-url">REST base URL *</label>
-          <input id="rest-base-url" data-testid="input-rest-base-url" value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://host.example/api" aria-invalid={Boolean(fieldErrors.baseUrl)} aria-describedby={fieldErrors.baseUrl ? "rest-base-url-error" : undefined} />
+          <input id="rest-base-url" data-testid="input-rest-base-url" value={baseUrl} onChange={event => changeConfiguration(setBaseUrl, event.target.value)} placeholder="https://host.example/api" aria-invalid={Boolean(fieldErrors.baseUrl)} aria-describedby={fieldErrors.baseUrl ? "rest-base-url-error" : undefined} />
           {fieldErrors.baseUrl && <span className="field-error" id="rest-base-url-error" data-testid="error-source-base-url">{fieldErrors.baseUrl}</span>}
-          <span className="field-hint">Registration and editing do not make a request. A request occurs only when an operator starts a sync.</span>
+          <span className="field-hint">Saving does not make a request. Discovery and sync are separate, explicit GET actions.</span>
         </div>
         <div className="field span-2">
           <label htmlFor="rest-endpoint-path">Endpoint path *</label>
-          <input id="rest-endpoint-path" data-testid="input-rest-endpoint-path" value={endpointPath} onChange={event => setEndpointPath(event.target.value)} placeholder="v1/events" aria-invalid={Boolean(fieldErrors.endpointPath)} />
+          <input id="rest-endpoint-path" data-testid="input-rest-endpoint-path" value={endpointPath} onChange={event => changeConfiguration(setEndpointPath, event.target.value)} placeholder="v1/events" aria-invalid={Boolean(fieldErrors.endpointPath)} />
           {fieldErrors.endpointPath && <span className="field-error">{fieldErrors.endpointPath}</span>}
           <span className="field-hint">Relative to the base URL. Only GET is supported.</span>
         </div>
         <div className="field">
           <label htmlFor="rest-auth-mode">Authentication</label>
-          <select id="rest-auth-mode" data-testid="select-rest-auth-mode" value={authMode} onChange={event => setAuthMode(event.target.value as RestApiAuthMode)} aria-invalid={Boolean(fieldErrors.authMode)}>
+          <select id="rest-auth-mode" data-testid="select-rest-auth-mode" value={authMode} onChange={event => { setAuthMode(event.target.value as RestApiAuthMode); clearDiscovery(); }} aria-invalid={Boolean(fieldErrors.authMode)}>
             <option value="none">None</option><option value="bearer">Bearer token</option>
           </select>
           {fieldErrors.authMode && <span className="field-error">{fieldErrors.authMode}</span>}
@@ -513,37 +779,53 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         </div>
         <div className="field">
           <label htmlFor="credential-reference">Bearer token environment reference</label>
-          <input id="credential-reference" data-testid="input-credential-reference" value={credentialRef} onChange={event => { setCredentialRef(event.target.value); setClearCredential(false); }} placeholder={editing && credentialConfigured ? "Existing reference is configured" : "env:KUDU_SOURCE_ERP_TOKEN"} autoComplete="off" aria-invalid={Boolean(fieldErrors.credentialRef)} />
+          <input id="credential-reference" data-testid="input-credential-reference" value={credentialRef} onChange={event => { setCredentialRef(event.target.value); setClearCredential(false); clearDiscovery(); }} placeholder={editing && credentialConfigured ? "Existing reference is configured" : "env:KUDU_SOURCE_ERP_TOKEN"} autoComplete="off" aria-invalid={Boolean(fieldErrors.credentialRef)} />
           {fieldErrors.credentialRef && <span className="field-error" data-testid="error-source-credential-ref">{fieldErrors.credentialRef}</span>}
           <span className="field-hint">{editing ? "The reference is redacted. Leave blank to preserve it; entered text replaces it." : "Reference only. Provision the environment variable separately; never enter its secret value here."}</span>
-          {editing && credentialConfigured && <label className="check-row"><input type="checkbox" checked={clearCredential} onChange={event => { setClearCredential(event.target.checked); if (event.target.checked) setCredentialRef(""); }} data-testid="checkbox-clear-credential-reference" /><span>Clear existing credential reference on save</span></label>}
+          {editing && credentialConfigured && <label className="check-row"><input type="checkbox" checked={clearCredential} onChange={event => { setClearCredential(event.target.checked); if (event.target.checked) setCredentialRef(""); clearDiscovery(); }} data-testid="checkbox-clear-credential-reference" /><span>Clear existing credential reference on save</span></label>}
         </div>
         <div className="field">
           <label htmlFor="rest-timeout">Timeout (ms)</label>
-          <input id="rest-timeout" type="number" min="500" max="30000" step="1" value={timeoutMs} onChange={event => setTimeoutMs(event.target.value)} aria-invalid={Boolean(fieldErrors.timeoutMs)} />
+          <input id="rest-timeout" type="number" min="500" max="30000" step="1" value={timeoutMs} onChange={event => changeConfiguration(setTimeoutMs, event.target.value)} aria-invalid={Boolean(fieldErrors.timeoutMs)} />
           {fieldErrors.timeoutMs && <span className="field-error">{fieldErrors.timeoutMs}</span>}
         </div>
         <div className="field">
           <label htmlFor="rest-max-response">Maximum response bytes</label>
-          <input id="rest-max-response" type="number" min="1024" max="5242880" step="1024" value={maxResponseBytes} onChange={event => setMaxResponseBytes(event.target.value)} aria-invalid={Boolean(fieldErrors.maxResponseBytes)} />
+          <input id="rest-max-response" type="number" min="1024" max="5242880" step="1024" value={maxResponseBytes} onChange={event => changeConfiguration(setMaxResponseBytes, event.target.value)} aria-invalid={Boolean(fieldErrors.maxResponseBytes)} />
           {fieldErrors.maxResponseBytes && <span className="field-error">{fieldErrors.maxResponseBytes}</span>}
         </div>
         <div className="field">
           <label htmlFor="rest-max-records">Maximum records</label>
-          <input id="rest-max-records" type="number" min="1" max="1000" step="1" value={maxRecords} onChange={event => setMaxRecords(event.target.value)} aria-invalid={Boolean(fieldErrors.maxRecords)} />
+          <input id="rest-max-records" type="number" min="1" max="1000" step="1" value={maxRecords} onChange={event => changeConfiguration(setMaxRecords, event.target.value)} aria-invalid={Boolean(fieldErrors.maxRecords)} />
           {fieldErrors.maxRecords && <span className="field-error">{fieldErrors.maxRecords}</span>}
         </div>
         <div className="field">
           <label htmlFor="rest-records-path">JSON records path</label>
-          <input id="rest-records-path" data-testid="input-rest-records-path" value={recordsPath} onChange={event => setRecordsPath(event.target.value)} placeholder="data.events" aria-invalid={Boolean(fieldErrors.recordsPath)} />
+          <input id="rest-records-path" data-testid="input-rest-records-path" value={recordsPath} onChange={event => changeConfiguration(setRecordsPath, event.target.value)} placeholder="data.events" aria-invalid={Boolean(fieldErrors.recordsPath)} />
           {fieldErrors.recordsPath && <span className="field-error">{fieldErrors.recordsPath}</span>}
           <span className="field-hint">Dot path to the array; leave blank when the response is an array.</span>
         </div>
         <div className="field"><span className="field-label">Response format</span><span className="field-hint">JSON only</span></div>
       </div>}
-      {(type === "json_file" || type === "csv_file") && <div className="field"><label htmlFor="source-relative-path">Relative file path *</label><input id="source-relative-path" data-testid="input-source-relative-path" value={relativePath} onChange={event => setRelativePath(event.target.value)} placeholder="data/measurements.csv" aria-invalid={Boolean(fieldErrors.relativePath)} aria-describedby={fieldErrors.relativePath ? "source-relative-path-error" : undefined} />{fieldErrors.relativePath && <span className="field-error" id="source-relative-path-error" data-testid="error-source-relative-path">{fieldErrors.relativePath}</span>}<span className="field-hint">Relative to the configured local data root; no file is read by this workflow.</span></div>}
+      {(type === "json_file" || type === "csv_file") && <div className="field"><label htmlFor="source-relative-path">Relative file path *</label><input id="source-relative-path" data-testid="input-source-relative-path" value={relativePath} onChange={event => changeConfiguration(setRelativePath, event.target.value)} placeholder={type === "csv_file" ? "data/measurements.csv" : "data/faults.json"} aria-invalid={Boolean(fieldErrors.relativePath)} aria-describedby={fieldErrors.relativePath ? "source-relative-path-error" : undefined} />{fieldErrors.relativePath && <span className="field-error" id="source-relative-path-error" data-testid="error-source-relative-path">{fieldErrors.relativePath}</span>}<span className="field-hint">Relative to the configured local data root. Saving does not read the file; discovery and import are explicit actions.</span>
+        {type === "json_file" && <><label htmlFor="json-records-path">JSON records path</label><input id="json-records-path" data-testid="input-json-records-path" value={recordsPath} onChange={event => changeConfiguration(setRecordsPath, event.target.value)} placeholder="faults" /><span className="field-hint">Dot path to the record array; leave blank for a top-level array.</span></>}
+      </div>}
       {type === "manual" && <div className="notice" data-testid="notice-manual-source">Manual source is a reference record. No external connection or ingestion is available.</div>}
-      <div className="form-actions"><Link className="button button-quiet" href={editing ? `/data-sources/${encodeURIComponent(id)}` : "/data-sources"} data-testid="button-cancel-data-source">Cancel</Link><div className="form-actions-end"><button className="button button-primary" type="submit" disabled={busy} data-testid="button-submit-data-source">{busy ? "Saving…" : editing ? "Save changes" : "Create data source"}</button></div></div>
+      {type !== "manual" && <>
+        <div className="form-section"><h2>Discover and review</h2><p>Discovery makes one bounded read-only REST GET or reads the selected local file. It does not import, create assets, or activate a mapping.</p></div>
+        {discoveryError && <div className="notice error" role="alert" data-testid="error-data-discovery">{discoveryError}</div>}
+        <div className="form-actions"><button className="button" type="button" onClick={() => void runDiscovery()} disabled={busy || discoveryBusy} data-testid="button-discover-source">
+          {discoveryBusy ? "Discovering…" : "Discover structure & preview"}
+        </button></div>
+        {discovery && <DiscoveryReview
+          result={discovery}
+          selectedPath={selectedRecordPath}
+          onSelectPath={selectDiscoveryPath}
+          mappingPaths={mappingPaths}
+          onChangeMappingPath={(target, path) => setMappingPaths(current => ({ ...current, [target]: path }))}
+        />}
+      </>}
+      <div className="form-actions"><Link className="button button-quiet" href={editing ? `/data-sources/${encodeURIComponent(id)}` : "/data-sources"} data-testid="button-cancel-data-source">Cancel</Link><div className="form-actions-end"><button className="button button-primary" type="submit" disabled={busy || discoveryBusy} data-testid="button-submit-data-source">{busy ? "Saving…" : editing ? "Save changes" : "Create data source"}</button></div></div>
     </form></section>
   </main>;
 }

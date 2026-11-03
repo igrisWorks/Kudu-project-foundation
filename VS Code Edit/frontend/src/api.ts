@@ -7,6 +7,8 @@ import type {
   AssetType,
   AssetUpdateInput,
   DataSourceCreateInput,
+  DataSourceConfigurationInput,
+  DataSourceDiscoveryResult,
   DataSourceEnabledFilter,
   DataSourceRecord,
   DataSourceEventMapping,
@@ -233,6 +235,17 @@ export function createDataSource(input: DataSourceCreateInput): Promise<DataSour
   return request("/api/v1/data-sources", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function discoverDataSource(
+  sourceType: Exclude<DataSourceType, "manual">,
+  configuration: DataSourceConfigurationInput,
+  recordPath?: string,
+): Promise<DataSourceDiscoveryResult> {
+  return request("/api/v1/data-sources/discover", {
+    method: "POST",
+    body: JSON.stringify({ sourceType, configuration, ...(recordPath ? { recordPath } : {}) }),
   });
 }
 

@@ -222,6 +222,22 @@ tbody tr:hover { background: #f8fafc; }
 .mapping-validation-errors li + li { margin-top: 5px; }
 .mapping-valid-message { color: var(--good); }
 .mapping-actions { justify-content: flex-start; margin-top: 15px; }
+.discovery-review { margin: 14px 0; padding: 0 0 14px; border: 1px solid var(--line); }
+.discovery-review .panel-heading-row { padding: 15px 17px; border-bottom: 1px solid var(--line); }
+.discovery-review .panel-title { margin: 0; color: var(--navy); font-size: 14px; }
+.discovery-review > .field, .discovery-review > .field-hint { margin: 13px 17px; }
+.discovery-fields { margin: 13px 17px; }
+.discovery-fields td { min-width: 150px; vertical-align: top; }
+.discovery-fields td:last-child { min-width: 220px; }
+.discovery-fields select { min-width: 165px; }
+.discovery-preview-records { margin: 16px 17px; }
+.discovery-preview-records h3 { margin: 0 0 10px; color: var(--navy); font-size: 12px; }
+.discovery-preview-record { padding: 12px 0; border-top: 1px solid var(--line); }
+.discovery-preview-record > div { display: flex; align-items: center; gap: 9px; }
+.discovery-preview-record ul { padding-left: 19px; color: var(--warn); font-size: 11px; }
+.discovery-preview-record dl { display: grid; grid-template-columns: minmax(110px, .7fr) minmax(0, 1.3fr); gap: 5px 12px; margin: 10px 0 0; }
+.discovery-preview-record dt { color: #6d7b8d; font: 10px var(--mono); overflow-wrap: anywhere; }
+.discovery-preview-record dd { min-width: 0; margin: 0; color: #405067; font-size: 11px; overflow-wrap: anywhere; }
 .detail-actions[style] { justify-content: center; }
 .namespace-layout { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(340px, .88fr); gap: 22px; align-items: start; }
 .namespace-assets, .namespace-inspector { min-width: 0; }
@@ -325,6 +341,9 @@ tbody tr:hover { background: #f8fafc; }
   .event-filter-actions { justify-content: flex-start; }
   .mapping-fields { grid-template-columns: 1fr; }
   .mapping-panel .panel-heading-row { align-items: flex-start; }
+  .discovery-fields td { min-width: 130px; padding: 10px; }
+  .discovery-preview-record dl { grid-template-columns: 1fr; gap: 3px; }
+  .discovery-preview-record dd { margin-bottom: 6px; }
   .namespace-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .namespace-search { grid-column: 1 / -1; }
   .settings-state { align-items: flex-start; flex-direction: column; }

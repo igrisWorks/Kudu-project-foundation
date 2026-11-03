@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database, StoredSourceConfiguration } from "./database.js";
 import { ApiFailure } from "./errors.js";
-import { getActiveEventMapping, normalizeMappedEvent, type ActiveEventMapping } from "./event-mappings.js";
+import { getActiveEventMapping, normalizeMappedEvent, readMappedField, type ActiveEventMapping } from "./event-mappings.js";
 import { ingestEvent } from "./events.js";
 
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
@@ -26,7 +26,7 @@ interface PreparedImportInput {
   rawRecord: JsonObject;
 }
 
-interface CsvRow {
+export interface CsvRow {
   line: number;
   values: string[];
 }
@@ -144,7 +144,7 @@ function parseCsvRows(text: string): CsvRow[] {
   return rows;
 }
 
-function parseCsv(text: string, requireDefaultHeaders: boolean): { headers: string[]; rows: CsvRow[] } {
+export function parseCsv(text: string, requireDefaultHeaders: boolean): { headers: string[]; rows: CsvRow[] } {
   const [headerRow, ...rows] = parseCsvRows(text);
   if (!headerRow || headerRow.values.length === 0 || headerRow.values.some((header) => header.length === 0)) {
     throw importFileFailure("The CSV file must start with a non-empty header row.");
@@ -342,7 +342,7 @@ function safeImportError(error: unknown): Omit<FileImportRecordError, "record"> 
   };
 }
 
-async function readBoundedFile(filePath: string): Promise<Buffer> {
+export async function readBoundedFile(filePath: string): Promise<Buffer> {
   let handle: FileHandle;
   try {
     handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -382,7 +382,7 @@ async function readBoundedFile(filePath: string): Promise<Buffer> {
   }
 }
 
-async function resolveImportFile(
+export async function resolveImportFile(
   importDirectory: string,
   configuredRelativePath: string,
 ): Promise<string> {
@@ -438,6 +438,7 @@ async function processImport(
   format: ImportFormat,
   bytes: Buffer,
   activeMapping?: ActiveEventMapping,
+  recordsPath?: string,
 ): Promise<FileImportResult> {
   let text: string;
   try {
@@ -460,13 +461,16 @@ async function processImport(
     } catch {
       throw importFileFailure("The JSON file is malformed.");
     }
-    if (!Array.isArray(parsed)) {
+    const candidateRecords = recordsPath
+      ? isRecord(parsed) ? readMappedField(parsed as JsonObject, recordsPath) : undefined
+      : parsed;
+    if (!Array.isArray(candidateRecords)) {
       throw importFileFailure("The JSON file must contain an array of event objects.");
     }
-    if (parsed.length > MAX_IMPORT_RECORDS) {
+    if (candidateRecords.length > MAX_IMPORT_RECORDS) {
       throw new ApiFailure(413, "IMPORT_RECORD_LIMIT", `Import files are limited to ${MAX_IMPORT_RECORDS} records.`);
     }
-    inputs = parsed.map((record, index) => ({
+    inputs = candidateRecords.map((record, index) => ({
       record: index + 1,
       buildInput: () => jsonRecordToEventInput(sourceId, relativePath, record, index + 1, Boolean(activeMapping)),
     }));
@@ -561,9 +565,19 @@ export function registerFileImportRoutes(
         );
       }
       const activeMapping = await getActiveEventMapping(db, source.id);
+      if (configuration.kind === "json_file" && configuration.recordsPath && !activeMapping) {
+        throw new ApiFailure(
+          409,
+          "ACTIVE_MAPPING_REQUIRED",
+          "Activate an event mapping before importing from a nested JSON records path.",
+        );
+      }
       const filePath = await resolveImportFile(importDirectory, configuration.relativePath);
       const bytes = await readBoundedFile(filePath);
-      return processImport(db, source.id, configuration.relativePath, format, bytes, activeMapping);
+      return processImport(
+        db, source.id, configuration.relativePath, format, bytes, activeMapping,
+        configuration.kind === "json_file" ? configuration.recordsPath : undefined,
+      );
     },
   );
 }

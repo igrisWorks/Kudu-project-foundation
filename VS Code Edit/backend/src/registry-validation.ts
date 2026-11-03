@@ -423,10 +423,12 @@ function parseConfiguration(
   }
 
   if (sourceType === "json_file" || sourceType === "csv_file") {
-    unknownFields(value, ["kind", "relativePath"], errors);
+    unknownFields(value, sourceType === "json_file" ? ["kind", "relativePath", "recordsPath"] : ["kind", "relativePath"], errors);
+    const recordsPath = sourceType === "json_file" ? parseRecordsPath(value.recordsPath, errors) : undefined;
     return {
       kind: sourceType,
       relativePath: parseRelativePath(value.relativePath, errors),
+      ...(recordsPath !== undefined && sourceType === "json_file" ? { recordsPath } : {}),
     };
   }
 

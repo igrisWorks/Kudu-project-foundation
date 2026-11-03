@@ -197,6 +197,11 @@ function sourceConfigurationMetadata(
         ...(configuration.recordsPath !== undefined ? { recordsPath: configuration.recordsPath } : {}),
       };
     case "json_file":
+      return {
+        kind: "json_file",
+        relativePath: configuration.relativePath,
+        ...(configuration.recordsPath ? { recordsPath: configuration.recordsPath } : {}),
+      };
     case "csv_file":
       return { kind: configuration.kind, relativePath: configuration.relativePath };
     case "manual":

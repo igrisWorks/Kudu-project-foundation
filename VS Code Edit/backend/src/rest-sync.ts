@@ -435,6 +435,40 @@ function validateLimits(configuration: Extract<StoredSourceConfiguration, { kind
   return { timeoutMs, maxResponseBytes, maxRecords };
 }
 
+export async function fetchRestDiscoveryDocument(
+  configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }>,
+  policy: NetworkPolicy = {},
+): Promise<unknown> {
+  const url = endpointUrl(configuration);
+  const limits = validateLimits(configuration);
+  if (!url || !limits) throw new ApiFailure(400, "SOURCE_CONFIGURATION_INVALID", "Configure a valid endpoint path and bounded request limits.");
+  if (configuration.authMode === "bearer" && url.protocol !== "https:") {
+    throw new ApiFailure(400, "BEARER_REQUIRES_HTTPS", "Bearer authentication requires HTTPS.");
+  }
+  const token = parseBearerToken(configuration);
+  if (configuration.authMode === "bearer" && !token) {
+    throw new ApiFailure(400, "BEARER_TOKEN_UNAVAILABLE", "The configured bearer-token environment variable is not available.");
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await requestJson(
+      url,
+      token ? `Bearer ${token}` : undefined,
+      limits.timeoutMs,
+      limits.maxResponseBytes,
+      policy,
+    );
+  } catch (cause) {
+    if (cause instanceof RestRequestError) throw new ApiFailure(cause.statusCode, cause.code, cause.message);
+    throw new ApiFailure(502, "REST_REQUEST_FAILED", "The remote request failed.");
+  }
+  try {
+    return JSON.parse(bytes.toString("utf8")) as unknown;
+  } catch {
+    throw new ApiFailure(502, "REST_INVALID_JSON", "The remote response was not valid JSON.");
+  }
+}
+
 export function registerRestSyncRoutes(
   app: FastifyInstance,
   db: Kysely<Database>,

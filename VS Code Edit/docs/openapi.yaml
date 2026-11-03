@@ -4,10 +4,10 @@ info:
   version: 0.1.0
   summary: Asset and data-source registry API
   description: |
-    Versioned API for Kudu's registries, event ingestion, file imports, REST sync, and source event mappings.
+    Versioned API for Kudu's registries, event ingestion, source discovery, file imports, REST sync, and source event mappings.
 
-    Data-source registration stores metadata only. Kudu connects to a REST
-    endpoint only after an operator explicitly triggers a sync. REST sync uses
+    Data-source registration stores metadata only. Kudu reads a REST endpoint
+    only after an operator explicitly requests discovery or sync. REST reads use
     bounded GET/JSON requests, active event mappings, and SSRF destination
     protections. Credential references are environment-variable names and are
     redacted from responses.
@@ -274,6 +274,36 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/data-sources/discover:
+    post:
+      tags: [Data sources]
+      operationId: discoverDataSource
+      summary: Inspect one REST, JSON, or CSV source on demand
+      description: |
+        Makes one bounded GET for a REST source or reads the configured file
+        inside the import directory. It returns candidate record collections,
+        redacted sample fields, mapping suggestions, and preview validation.
+        It does not persist events, create assets, or activate a mapping.
+        Choose a collection explicitly when more than one is found.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DataSourceDiscoveryRequest"
+      responses:
+        "200":
+          description: Candidate collections, inferred fields, suggestions, and a small sample preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataSourceDiscoveryResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          description: The source response or file exceeds its configured size limit.
+        "502":
+          description: The remote REST response could not be fetched or parsed.
   /api/v1/data-sources/{id}:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -984,6 +1014,10 @@ components:
               const: json_file
             relativePath:
               $ref: "#/components/schemas/RelativePath"
+            recordsPath:
+              type: string
+              maxLength: 256
+              description: Dot path to the record array; blank means a top-level array.
         - type: object
           additionalProperties: false
           required: [kind, relativePath]
@@ -1043,6 +1077,9 @@ components:
               const: json_file
             relativePath:
               $ref: "#/components/schemas/RelativePath"
+            recordsPath:
+              type: string
+              maxLength: 256
         - type: object
           required: [kind, relativePath]
           properties:
@@ -1146,6 +1183,96 @@ components:
           $ref: "#/components/schemas/DataSourceConfigurationInput"
         enabled:
           type: boolean
+    DataSourceDiscoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceType, configuration]
+      properties:
+        sourceType:
+          type: string
+          enum: [rest_api, json_file, csv_file]
+        configuration:
+          $ref: "#/components/schemas/DataSourceConfigurationInput"
+        recordPath:
+          type: string
+          maxLength: 256
+          description: Select one collection path returned by an earlier discovery response.
+    DataSourceDiscoveryResult:
+      type: object
+      required: [sourceType, recordPaths, selectedRecordPath, fields, suggestions, preview, warnings]
+      properties:
+        sourceType:
+          type: string
+          enum: [rest_api, json_file, csv_file]
+        recordPaths:
+          type: array
+          items:
+            type: object
+            required: [path, recordCount, supported]
+            properties:
+              path: { type: string }
+              recordCount: { type: integer, minimum: 0 }
+              supported: { type: boolean }
+        selectedRecordPath:
+          type: [string, "null"]
+        fields:
+          type: array
+          items:
+            type: object
+            required: [path, valueType, examples]
+            properties:
+              path: { type: string }
+              valueType:
+                type: string
+                enum: [string, number, boolean, datetime, object, array, mixed, unknown]
+              examples:
+                type: array
+                items: { type: string }
+        suggestions:
+          type: array
+          items:
+            type: object
+            required: [target, sourcePath, confidence, confidenceScore, required, ambiguous, alternatives, examples, note]
+            properties:
+              target:
+                type: string
+                enum: [eventType, occurredAt, sourceRecordId, assetKey, message, severity, errorCode]
+              sourcePath: { type: [string, "null"] }
+              confidence:
+                type: string
+                enum: [high, medium, low]
+              confidenceScore: { type: number, minimum: 0, maximum: 1 }
+              required: { type: boolean }
+              ambiguous: { type: boolean }
+              alternatives:
+                type: array
+                items: { type: string }
+              examples:
+                type: array
+                items: { type: string }
+              note: { type: string }
+        preview:
+          type: array
+          items:
+            type: object
+            required: [recordNumber, state, issues, values, normalized]
+            properties:
+              recordNumber: { type: integer, minimum: 1 }
+              state:
+                type: string
+                enum: [valid, warning, rejected]
+              issues:
+                type: array
+                items: { type: string }
+              values:
+                type: object
+                additionalProperties: { type: string }
+              normalized:
+                type: object
+                additionalProperties: { type: string }
+        warnings:
+          type: array
+          items: { type: string }
     JsonValue:
       oneOf:
         - type: [string, number, boolean, "null"]

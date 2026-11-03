@@ -26,7 +26,7 @@ export type StoredSourceConfiguration =
       responseFormat?: "json";
       recordsPath?: string;
     }
-  | { kind: "json_file"; relativePath: string }
+  | { kind: "json_file"; relativePath: string; recordsPath?: string }
   | { kind: "csv_file"; relativePath: string }
   | { kind: "manual" };
 

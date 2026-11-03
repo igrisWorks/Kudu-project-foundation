@@ -34,7 +34,7 @@ Database unavailable response (`503`):
 
 ## Authentication
 
-`GET /healthz`, `GET /api/v1/health`, and `GET /api/v1/auth/session` are public. `POST /api/v1/auth/login` accepts a password and sets an opaque session cookie. All other `/api/v1` routes require that session and the `X-Kudu-CSRF` header matching the same-site CSRF cookie, including sensitive reads, writes, event ingestion, file import, and REST sync. `POST /api/v1/auth/logout` revokes the current session.
+`GET /healthz`, `GET /api/v1/health`, and `GET /api/v1/auth/session` are public. `POST /api/v1/auth/login` accepts a password and sets an opaque session cookie. All other `/api/v1` routes require that session and the `X-Kudu-CSRF` header matching the same-site CSRF cookie, including sensitive reads, writes, event ingestion, file import, source discovery, and REST sync. `POST /api/v1/auth/logout` revokes the current session.
 
 The login response does not include the session or CSRF token in JSON. The session cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` by default; the separate CSRF cookie is same-site and required alongside the header for every protected API request. Sessions expire after 8 hours and are held in memory, so restarting Kudu invalidates them. There is one shared operator password and no roles.
 
@@ -93,12 +93,13 @@ Example:
 | `POST` | `/api/v1/data-sources` | Register source metadata; returns `201`. Does not connect or ingest. |
 | `GET` | `/api/v1/data-sources/{id}` | Get metadata and redacted configuration status. |
 | `PATCH` | `/api/v1/data-sources/{id}` | Update supplied metadata. Changing source type requires matching configuration. |
+| `POST` | `/api/v1/data-sources/discover` | Explicitly inspect one REST, JSON, or CSV source and return candidate collections, field suggestions, and a bounded preview. |
 
 Supported source types are `rest_api`, `json_file`, `csv_file`, and `manual`. REST configuration accepts an HTTP(S) base URL without credentials, query parameters, or fragments, plus a relative endpoint path. Only `GET` and JSON responses are supported. Configure the JSON records path (a dot path or blank for a top-level array), timeout, response-size limit, and record-count limit.
 
 Authentication is either `none` or `bearer`. Bearer authentication requires HTTPS and an environment-variable reference such as `env:KUDU_SOURCE_ERP_TOKEN`. The referenced variable must be provisioned out of band. The API returns only whether a reference is configured; it never returns the reference or secret value. A reference from an older registry version is inactive unless `authMode` is `bearer`.
 
-Registration, editing, viewing, and listing never make outbound requests. Only the explicit sync endpoint connects to a REST source. File-source paths must be relative to the configured import directory.
+Registration, editing, viewing, and listing never make outbound requests or read files. `Discover` is a separate operator action: it sends one bounded REST `GET` or reads the registered relative file, but does not ingest events, create assets, or activate mappings. REST discovery and sync both use the existing destination validation and authentication rules.
 
 Example:
 
@@ -123,13 +124,36 @@ Example:
 }
 ```
 
+### On-demand discovery
+
+The discovery request takes a supported `sourceType`, the same validated configuration used when registering the source, and an optional `recordPath` previously returned by discovery. REST sources are fetched with one bounded `GET`; JSON and CSV sources are read beneath `KUDU_IMPORT_DIRECTORY` with the existing file-size, path, and symlink protections. No pagination or recurring polling is performed.
+
+The response reports candidate record arrays (including nested arrays within JSON objects), sample field paths and inferred types, examples, confidence-ranked mapping suggestions, ambiguities, a proposed normalized preview, and validation issues. Sensitive-looking field values are hidden in examples. If multiple record collections are found, an operator must select one. The UI allows changing or excluding each field suggestion. Saving an accepted suggestion creates or updates a versioned draft only; an operator must validate and explicitly activate it. Unmapped source fields remain in event payloads and provenance.
+
+Example request:
+
+```json
+{
+  "sourceType": "rest_api",
+  "configuration": {
+    "kind": "rest_api",
+    "baseUrl": "https://faults.example.test/api",
+    "endpointPath": "faults",
+    "method": "GET",
+    "authMode": "none",
+    "maxResponseBytes": 1048576,
+    "maxRecords": 500
+  }
+}
+```
+
 ### REST API sync
 
 | Method | Route | Behavior |
 |---|---|---|
 | `POST` | `/api/v1/data-sources/{id}/sync` | Fetch and ingest records from one enabled REST source. The request has no body and accepts no URL or method override. |
 
-Sync requires an active event mapping. The configured endpoint is formed from the base URL and relative endpoint path, uses `GET` only, and parses the configured JSON array. Each object record is normalized by the same versioned mapping and submitted through normal event ingestion and source-scoped deduplication. The result reports `requestSucceeded`, `fetched`, `imported`, `duplicates`, `failed`, and up to 100 concise errors. Request or response failures return `requestSucceeded: false`; record-level ingestion failures increment `failed`. Runs are on demand and are not scheduled or stored as history.
+Sync requires an active event mapping. The configured endpoint is formed from the base URL and relative endpoint path, uses `GET` only, and parses the configured JSON array. The collection path selected during discovery is saved in source configuration. Each object record is normalized by the same versioned mapping and submitted through normal event ingestion and source-scoped deduplication. ISO/date strings and Unix epoch seconds or milliseconds are accepted for mapped occurrence times; original timestamp text is retained as `sourceTimestamp`. The result reports `requestSucceeded`, `fetched`, `imported`, `duplicates`, `failed`, and up to 100 concise errors. Request or response failures return `requestSucceeded: false`; record-level ingestion failures increment `failed`. Runs are on demand and are not scheduled or stored as history.
 
 Example remote response and mapping:
 
@@ -163,7 +187,7 @@ For trusted on-premises APIs, configure `KUDU_REST_TRUSTED_HOSTS` as a comma-sep
 |---|---|---|
 | `POST` | `/api/v1/data-sources/{id}/import` | Import the file already configured on an enabled CSV or JSON source. The request has no body and accepts no filesystem path. |
 
-The route reads the source's registered `configuration.relativePath` beneath `KUDU_IMPORT_DIRECTORY`. Absolute paths, traversal segments, and symlinks escaping that directory are rejected. The configured extension must match the source type (`.csv` for `csv_file`, `.json` for `json_file`). REST API and manual sources are not importable. Disabled sources return `409`.
+The route reads the source's registered `configuration.relativePath` beneath `KUDU_IMPORT_DIRECTORY`. Absolute paths, traversal segments, and symlinks escaping that directory are rejected. The configured extension must match the source type (`.csv` for `csv_file`, `.json` for `json_file`). REST API and manual sources are not importable. Disabled sources return `409`. An alternate nested JSON `recordsPath` requires an active event mapping; without one, the legacy top-level-array parser and payload rules are preserved.
 
 The default local import directory is `imports/` at the project root. In Docker Compose, the host directory defaults to `./imports` and is mounted read-only at `/imports`. Configure `KUDU_IMPORT_DIRECTORY` for direct local runs, and `KUDU_IMPORT_HOST_DIRECTORY` to change the Compose host directory.
 
@@ -174,7 +198,7 @@ eventType,occurredAt,sourceRecordId,payload,station
 alarm.raised,2026-10-27T12:00:00Z,row-001,"{""code"":""E-7""}",press-2
 ```
 
-JSON files contain an array of event objects with the same default fields. Without an active mapping, unknown top-level keys are merged into `payload`; duplicate keys between those fields and `payload` fail the record instead of overwriting data. An active mapping may read selected fields directly from the source object and does not require a `payload` object.
+JSON files contain an array of event objects with the same default fields, or an object with a nested record array selected by the optional `recordsPath` dot path. Nested paths are imported only after an active mapping is explicitly reviewed and activated. Without an active mapping, the legacy top-level-array parser remains unchanged: unknown top-level keys in each record are merged into `payload`; duplicate keys between those fields and `payload` fail the record instead of overwriting data. An active mapping may read selected fields directly from the source object and does not require a `payload` object.
 
 ```json
 [
@@ -200,7 +224,7 @@ Each valid record is sent through the normal event validation, reference checks,
 | `POST` | `/api/v1/data-sources/{id}/mappings/{version}/validate` | Validate the definition and save any errors. |
 | `POST` | `/api/v1/data-sources/{id}/mappings/{version}/activate` | Activate a validated draft and retire the previously active version. |
 
-Mappings are available for registered CSV, JSON, and REST API sources. A definition selects source field paths for required event type and occurrence timestamp, optional source-record ID and asset key, and optional payload output fields. Nested JSON paths use dot notation; array indexing and value transformations are not supported.
+Mappings are available for registered CSV, JSON, and REST API sources. A definition selects source field paths for required event type and occurrence timestamp, optional source-record ID and asset key, and optional payload output fields. Nested JSON paths use dot notation; array indexing and arbitrary value transformations are not supported. Discovery accepts supported Unix epoch seconds and milliseconds for occurrence timestamps.
 
 ```json
 {
