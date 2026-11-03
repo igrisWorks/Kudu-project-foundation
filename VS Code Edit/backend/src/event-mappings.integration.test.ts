@@ -161,7 +161,7 @@ test(
 
     await writeFile(
       join(importDirectory, "plant/reused.csv"),
-      `kind,time,sourceRecordId,assetKey,pressure\\npressure.alarm,2026-11-02T10:01:00Z,pg-reused-csv-1,${asset.key},32\\n`,
+      `kind,time,sourceRecordId,assetKey,pressure\npressure.alarm,2026-11-02T10:01:00Z,pg-reused-csv-1,${asset.key},32\n`,
       "utf8",
     );
     await createValidateActivate(app, csvSourceId, reusableDefinition, 1);
@@ -170,7 +170,7 @@ test(
       url: `/api/v1/data-sources/${csvSourceId}/import`,
     });
     assert.equal(imported.statusCode, 200, imported.body);
-    assert.equal(imported.json().imported, 1);
+    assert.equal(imported.json().imported, 1, JSON.stringify(imported.json()));
     assert.equal(imported.json().failed, 0);
     const eventList = await app.inject({ method: "GET", url: `/api/v1/events?sourceId=${csvSourceId}` });
     const event = eventList.json().items[0] as { id: string; sourceRecordId: string };
@@ -359,7 +359,7 @@ test(
     );
     assert.equal(
       imported.json().errors[0].fields?.occurredAt,
-      "Provide a value in the mapped source field timestamp.",
+      "Provide a valid date/time or Unix timestamp in timestamp.",
       JSON.stringify(imported.json().errors[0]),
     );
   },

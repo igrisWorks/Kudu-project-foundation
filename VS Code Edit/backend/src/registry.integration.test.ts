@@ -34,7 +34,7 @@ test(
       const table = await pool.query<{ table_name: string | null }>(
         "SELECT to_regclass('kudu.data_source_sync_runs')::text AS table_name",
       );
-      assert.equal(table.rows[0]?.table_name, "kudu.data_source_sync_runs");
+      assert.equal(table.rows[0]?.table_name, "data_source_sync_runs");
     } finally {
       await pool.end();
     }

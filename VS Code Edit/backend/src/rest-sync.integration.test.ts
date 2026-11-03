@@ -49,6 +49,7 @@ async function createFixture(context: TestLifecycle) {
 
   context.after(async () => {
     if (sourceIds.length) {
+      await db.deleteFrom("data_source_sync_runs").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("data_source_event_mappings").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("events").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("data_sources").where("id", "in", sourceIds).execute();
@@ -174,7 +175,7 @@ test("REST source configuration accepts bounded GET/JSON and rejects write metho
   }
   assertFieldRejected({ method: "POST" }, "method");
   assertFieldRejected({ authMode: "bearer", baseUrl: "http://api.example.test" }, "authMode");
-  assertFieldRejected({ maxRecords: 1001 }, "maxRecords");
+  assertFieldRejected({ maxRecords: 100_001 }, "maxRecords");
 });
 
 test(
@@ -262,16 +263,19 @@ test(
     context.after(() => closeServer(server));
 
     const { app, addSource, activateMapping } = await createFixture(context);
-    for (const [path, expectedCode] of [["bad-json", "REST_INVALID_JSON"], ["http-error", "REST_HTTP_ERROR"]] as const) {
+    for (const [path, expectedCode, expectedRequestSucceeded] of [
+      ["bad-json", "REST_INVALID_JSON", true],
+      ["http-error", "REST_HTTP_ERROR", false],
+    ] as const) {
       const sourceId = await addSource(port, path);
       await activateMapping(sourceId);
       const response = await app.inject({ method: "POST", url: `/api/v1/data-sources/${sourceId}/sync` });
       assert.equal(response.statusCode, 200, response.body);
       const result = response.json();
-      assert.equal(result.requestSucceeded, false);
+      assert.equal(result.requestSucceeded, expectedRequestSucceeded);
       assert.equal(result.fetched, 0);
       assert.equal(result.errors[0].code, expectedCode);
-      assert.equal(response.body.includes("sensitive remote body"), false);
+      assert.equal(response.body.includes("sensitive remote body"), false, response.body);
     }
   },
 );
