@@ -218,6 +218,7 @@ export class LocalDatabaseManager {
         this.handle.raw.pragma("defer_foreign_keys = ON");
         this.handle.raw.exec(`
           DELETE FROM events;
+          DELETE FROM data_source_sync_runs;
           DELETE FROM data_source_event_mappings;
           DELETE FROM data_sources;
           DELETE FROM assets;

@@ -30,7 +30,10 @@ const jsonColumns = new Set([
   "provenance",
   "definition",
   "validation_errors",
+  "checkpoint",
+  "errors",
 ]);
+const booleanColumns = new Set(["enabled", "resumable", "request_succeeded", "errors_truncated"]);
 const dateColumns = new Set([
   "created_at",
   "updated_at",
@@ -39,6 +42,8 @@ const dateColumns = new Set([
   "ingested_at",
   "validated_at",
   "activated_at",
+  "started_at",
+  "completed_at",
 ]);
 
 export interface SqliteDatabaseHandle {
@@ -112,7 +117,7 @@ class SqliteValuePlugin implements KyselyPlugin {
         const row = { ...source } as Record<string, unknown>;
         for (const [column, value] of Object.entries(row)) {
           if (typeof value === "string" && jsonColumns.has(column)) row[column] = JSON.parse(value) as unknown;
-          else if (typeof value === "number" && column === "enabled") row[column] = value !== 0;
+          else if (typeof value === "number" && booleanColumns.has(column)) row[column] = value !== 0;
           else if (typeof value === "string" && dateColumns.has(column)) row[column] = new Date(value);
         }
         return row;

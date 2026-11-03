@@ -26,6 +26,7 @@ import type {
   IngestEventResponse,
   Page,
   RestSyncResult,
+  RestSyncRunsResponse,
 } from "@kudu/shared";
 
 export interface LocalDatabaseResponse {
@@ -269,6 +270,17 @@ export function syncRestDataSource(id: string): Promise<RestSyncResult> {
   return request(`/api/v1/data-sources/${encodeURIComponent(id)}/sync`, {
     method: "POST",
   });
+}
+
+export function listRestSyncRuns(id: string): Promise<RestSyncRunsResponse> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}/sync-runs`);
+}
+
+export function resumeRestSyncRun(id: string, runId: string): Promise<RestSyncResult> {
+  return request(
+    `/api/v1/data-sources/${encodeURIComponent(id)}/sync-runs/${encodeURIComponent(runId)}/resume`,
+    { method: "POST" },
+  );
 }
 
 export function listDataSourceEventMappings(id: string): Promise<DataSourceEventMappingsResponse> {

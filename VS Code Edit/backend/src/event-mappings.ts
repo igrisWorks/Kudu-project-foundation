@@ -1,5 +1,6 @@
 import type {
   DataSourceEventMapping,
+  ExternalIdentifier,
   EventMappingDefinition,
   EventMappingStatus,
   EventMappingValidationError,
@@ -104,6 +105,74 @@ export interface ActiveEventMapping {
   definition: EventMappingDefinition;
 }
 
+export interface AssetMatchContext {
+  sourceKey: string;
+  assets: Array<{
+    id: string;
+    assetKey: string;
+    name: string;
+    externalIdentifiers: ExternalIdentifier[];
+  }>;
+}
+
+export async function loadAssetMatchContext(db: Kysely<Database>, sourceKey: string): Promise<AssetMatchContext> {
+  const assets = await db.selectFrom("assets")
+    .select(["id", "asset_key", "name", "external_identifiers"])
+    .where("archived_at", "is", null)
+    .execute();
+  return {
+    sourceKey,
+    assets: assets.map(asset => ({
+      id: asset.id,
+      assetKey: asset.asset_key,
+      name: asset.name,
+      externalIdentifiers: asset.external_identifiers,
+    })),
+  };
+}
+
+function resolveAssetIdentifier(
+  value: string,
+  context: AssetMatchContext,
+): { assetId?: string; provenance: JsonObject } {
+  const sourceIdentifier = value;
+  const byKey = context.assets.find(asset => asset.assetKey === value);
+  if (byKey) {
+    return {
+      assetId: byKey.id,
+      provenance: { status: "matched", confidence: 1, sourceIdentifier, matchedAssetId: byKey.id, matchType: "asset_key" },
+    };
+  }
+  const normalizedSourceKey = context.sourceKey.toLocaleLowerCase("en-US");
+  const byExternalId = context.assets.filter(asset => asset.externalIdentifiers.some(identifier =>
+    identifier.sourceKey.toLocaleLowerCase("en-US") === normalizedSourceKey && identifier.externalId === value));
+  const externalMatch = byExternalId.length === 1 ? byExternalId[0] : undefined;
+  if (externalMatch) {
+    return {
+      assetId: externalMatch.id,
+      provenance: { status: "matched", confidence: 0.99, sourceIdentifier, matchedAssetId: externalMatch.id, matchType: "registered_external_identifier" },
+    };
+  }
+  if (byExternalId.length > 1) {
+    return {
+      provenance: { status: "ambiguous", confidence: 0, sourceIdentifier, candidateAssetIds: byExternalId.map(asset => asset.id) },
+    };
+  }
+  const nameMatches = context.assets.filter(asset => asset.name.trim().toLocaleLowerCase("en-US") === value.trim().toLocaleLowerCase("en-US"));
+  const nameMatch = nameMatches.length === 1 ? nameMatches[0] : undefined;
+  if (nameMatch) {
+    return {
+      provenance: { status: "unmatched", confidence: 0.7, sourceIdentifier, suggestedAssetId: nameMatch.id, matchType: "name_suggestion" },
+    };
+  }
+  if (nameMatches.length > 1) {
+    return {
+      provenance: { status: "ambiguous", confidence: 0, sourceIdentifier, candidateAssetIds: nameMatches.map(asset => asset.id), matchType: "name_suggestion" },
+    };
+  }
+  return { provenance: { status: "unmatched", confidence: 0, sourceIdentifier } };
+}
+
 function mappingRecordFailure(message: string, fields?: Record<string, string>): ApiFailure {
   return new ApiFailure(400, "INVALID_IMPORT_RECORD", message, fields);
 }
@@ -138,6 +207,7 @@ export async function normalizeMappedEvent(
   mapping: ActiveEventMapping,
   fallbackDeduplicationKey: string,
   provenance: JsonObject,
+  assetMatchContext?: AssetMatchContext,
 ): Promise<JsonObject> {
   const { definition, version } = mapping;
   const eventType = readMappedField(rawRecord, definition.eventType!);
@@ -168,6 +238,7 @@ export async function normalizeMappedEvent(
   }
 
   let assetId: string | undefined;
+  let assetMatch: JsonObject | undefined;
   if (definition.assetKey) {
     const value = readMappedField(rawRecord, definition.assetKey);
     if (value !== undefined && value !== null && value !== "") {
@@ -176,17 +247,22 @@ export async function normalizeMappedEvent(
           assetKey: "Provide an exact registered asset key or leave the field blank.",
         });
       }
-      const asset = await db
-        .selectFrom("assets")
-        .select(["id", "archived_at"])
-        .where("asset_key", "=", String(value))
-        .executeTakeFirst();
-      if (!asset || asset.archived_at !== null) {
-        throw mappingRecordFailure("The mapped asset key does not identify an active registered asset.", {
-          assetKey: "Use an exact active asset key from the registry.",
-        });
+      if (assetMatchContext) {
+        const resolution = resolveAssetIdentifier(String(value), assetMatchContext);
+        assetId = resolution.assetId;
+        assetMatch = resolution.provenance;
+      } else {
+        const asset = await db.selectFrom("assets")
+          .select(["id", "archived_at"])
+          .where("asset_key", "=", String(value))
+          .executeTakeFirst();
+        if (asset && asset.archived_at === null) {
+          assetId = asset.id;
+          assetMatch = { status: "matched", confidence: 1, sourceIdentifier: String(value), matchedAssetId: asset.id, matchType: "asset_key" };
+        } else {
+          assetMatch = { status: "unmatched", confidence: 0, sourceIdentifier: String(value) };
+        }
       }
-      assetId = asset.id;
     }
   }
 
@@ -220,7 +296,12 @@ export async function normalizeMappedEvent(
     ...(sourceRecordId !== undefined ? { sourceRecordId } : {}),
     deduplicationKey: sourceRecordId?.trim() ? sourceRecordId : fallbackDeduplicationKey,
     payload,
-    provenance: { ...provenance, mappingVersion: version, originalRecord: rawRecord },
+    provenance: {
+      ...provenance,
+      ...(assetMatch ? { assetMatch } : {}),
+      mappingVersion: version,
+      originalRecord: rawRecord,
+    },
   };
 }
 

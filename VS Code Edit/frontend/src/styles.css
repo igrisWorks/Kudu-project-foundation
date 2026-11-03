@@ -205,6 +205,13 @@ tbody tr:hover { background: #f8fafc; }
 .file-import-errors { margin: 12px 17px; padding-left: 20px; color: #823b36; font-size: 11px; }
 .file-import-errors li + li { margin-top: 7px; }
 .file-import-field-errors { display: block; margin-top: 3px; color: #5d6b7d; }
+.sync-run-list { display: grid; gap: 12px; margin: 0; padding: 0 17px 17px; list-style: none; }
+.sync-run-list > li { padding: 13px; border: 1px solid #e1e6ed; border-radius: 4px; background: #fbfcfd; }
+.sync-run-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sync-run-list p { margin: 9px 0 0; color: #46576d; font-size: 11px; line-height: 1.55; }
+.sync-run-list details { margin-top: 10px; color: #46576d; font-size: 11px; }
+.sync-run-list details summary { cursor: pointer; }
+.sync-run-list .button { margin-top: 11px; }
 .mapping-panel { margin-top: 20px; }
 .mapping-panel .panel-heading-row, .mapping-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .mapping-panel .panel-heading-row { padding: 17px; border-bottom: 1px solid var(--line); }

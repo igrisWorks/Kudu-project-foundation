@@ -16,7 +16,7 @@ import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database, StoredSourceConfiguration } from "./database.js";
 import { ApiFailure } from "./errors.js";
-import { getActiveEventMapping, normalizeMappedEvent, readMappedField } from "./event-mappings.js";
+import { getActiveEventMapping, loadAssetMatchContext, normalizeMappedEvent, readMappedField } from "./event-mappings.js";
 import { ingestEvent } from "./events.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -29,6 +29,8 @@ const MAX_ERRORS = 100;
 const MAX_REDIRECTS = 3;
 const MAX_PAGES_PER_ACTION = 3;
 const MAX_RETRIES = 3;
+const MAX_CURSOR_LENGTH = 4096;
+const MAX_CURSOR_HISTORY = 1000;
 const SOURCE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CREDENTIAL_REF_PATTERN = /^env:KUDU_SOURCE_[A-Z0-9_]{1,80}$/;
@@ -400,24 +402,7 @@ function basePayload(record: JsonObject): JsonObject {
   return payload;
 }
 
-function failureResult(sourceId: string, error: RestRequestError): RestSyncResult {
-  return {
-    sourceId,
-    requestSucceeded: false,
-    fetched: 0,
-    imported: 0,
-    duplicates: 0,
-    failed: 0,
-    errors: [{ record: 0, code: error.code, message: error.message }],
-    errorsTruncated: false,
-  };
-}
-
-function configurationFailure(sourceId: string, code: string, message: string): RestSyncResult {
-  return failureResult(sourceId, new RestRequestError(code, message, 400));
-}
-
-interface SyncCheckpoint extends JsonObject {
+interface SyncCheckpoint {
   offset?: number;
   page?: number;
   cursor?: string;
@@ -539,7 +524,13 @@ function nextCursorFromResponse(
   if (!isRecord(value)) return undefined;
   const cursor = readMappedField(value as JsonObject, pagination.nextCursorPath!);
   if (cursor === undefined || cursor === null || cursor === "") return undefined;
-  if (typeof cursor === "string" || (typeof cursor === "number" && Number.isFinite(cursor))) return String(cursor);
+  if (typeof cursor === "string" || (typeof cursor === "number" && Number.isFinite(cursor))) {
+    const token = String(cursor);
+    if (token.length > MAX_CURSOR_LENGTH) {
+      throw new RestRequestError("REST_CURSOR_TOO_LARGE", "The remote cursor exceeded the supported size.", 400);
+    }
+    return token;
+  }
   throw new RestRequestError("REST_CURSOR_INVALID", "The configured next-cursor path did not contain a string or number.", 400);
 }
 
@@ -622,10 +613,14 @@ async function executeSyncRun(
   let lastErrorCode = run.last_error_code;
   let actionPages = 0;
   const pagination = source.configuration.pagination;
+  let assetMatchContext: Awaited<ReturnType<typeof loadAssetMatchContext>> | undefined;
   let done = false;
   let lastRequestAt = 0;
 
   try {
+    assetMatchContext = mapping.definition.assetKey
+      ? await loadAssetMatchContext(db, source.sourceKey)
+      : undefined;
     while (!done && actionPages < MAX_PAGES_PER_ACTION && pagesCompleted < MAX_RECORDS + 1) {
       const remaining = maxRecords - fetched;
       if (remaining <= 0) break;
@@ -670,6 +665,7 @@ async function executeSyncRun(
             mapping,
             fallbackKey(source.id, rawRecord),
             { connector: "rest_api", responseFormat: "json", syncRunId: run.id, mappingVersion: mapping.version },
+            assetMatchContext,
           );
           const ingestion = await ingestEvent(db, normalized);
           if (ingestion.duplicate) pageDuplicates += 1;
@@ -698,7 +694,7 @@ async function executeSyncRun(
           const hashes = checkpoint.cursorHashes ?? [];
           const hash = createHash("sha256").update(nextCursor).digest("hex");
           if (hashes.includes(hash)) throw new RestRequestError("REST_CURSOR_REPEATED", "The remote API repeated a cursor; sync stopped to prevent an infinite loop.", 400);
-          nextCheckpoint = { ...checkpoint, cursor: nextCursor, cursorHashes: [...hashes, hash].slice(-10_000) };
+          nextCheckpoint = { ...checkpoint, cursor: nextCursor, cursorHashes: [...hashes, hash].slice(-MAX_CURSOR_HISTORY) };
         }
       } else {
         done = records.length < request.requestedLimit;
@@ -744,7 +740,7 @@ async function executeSyncRun(
     });
     if (requestSucceeded && done) {
       await db.updateTable("data_sources").set({
-        last_successful_sync_at: new Date().toISOString(),
+        last_successful_sync_at: new Date(),
         last_error_summary: failed ? `${failed} record${failed === 1 ? "" : "s"} failed during the latest sync.` : null,
       }).where("id", "=", source.id).execute();
     }
@@ -899,143 +895,158 @@ export function registerRestSyncRoutes(
   db: Kysely<Database>,
   policy: NetworkPolicy = {},
 ): void {
+  async function loadEnabledRestSource(id: string) {
+    if (!SOURCE_ID_PATTERN.test(id)) throw new ApiFailure(400, "INVALID_ID", "A valid data-source identifier is required.");
+    const source = await db.selectFrom("data_sources")
+      .select(["id", "source_key", "source_type", "enabled", "configuration"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (!source) throw new ApiFailure(404, "NOT_FOUND", "Data source not found.");
+    if (source.source_type !== "rest_api") throw new ApiFailure(409, "UNSUPPORTED_SOURCE_TYPE", "Only REST API sources can be synced.");
+    if (!source.enabled) throw new ApiFailure(409, "SOURCE_DISABLED", "Enable this source before syncing.");
+    if (source.configuration.kind !== "rest_api") throw new ApiFailure(409, "SOURCE_CONFIGURATION_INVALID", "The REST source configuration is invalid.");
+    const configuration = source.configuration;
+    if (
+      (configuration.method !== undefined && configuration.method !== "GET") ||
+      (configuration.responseFormat !== undefined && configuration.responseFormat !== "json") ||
+      (configuration.authMode !== undefined && configuration.authMode !== "none" && configuration.authMode !== "bearer")
+    ) throw new ApiFailure(409, "SOURCE_CONFIGURATION_INVALID", "The REST source configuration is not supported.");
+    const endpoint = endpointUrl(configuration);
+    const limits = validateLimits(configuration);
+    if (!endpoint || !limits) throw new ApiFailure(409, "SOURCE_CONFIGURATION_INVALID", "Configure a valid endpoint path and bounded request limits.");
+    const mapping = await getActiveEventMapping(db, source.id);
+    if (!mapping) throw new ApiFailure(409, "ACTIVE_MAPPING_REQUIRED", "Activate an event mapping before syncing this REST source.");
+    if (configuration.authMode === "bearer" && endpoint.protocol !== "https:") {
+      throw new ApiFailure(409, "BEARER_REQUIRES_HTTPS", "Bearer authentication requires HTTPS.");
+    }
+    const token = parseBearerToken(configuration);
+    if (configuration.authMode === "bearer" && !token) {
+      throw new ApiFailure(409, "BEARER_TOKEN_UNAVAILABLE", "The configured bearer-token environment variable is not available.");
+    }
+    return {
+      id: source.id,
+      sourceKey: source.source_key,
+      configuration,
+      endpoint,
+      mapping,
+      token,
+      timeoutMs: limits.timeoutMs,
+      maxResponseBytes: limits.maxResponseBytes,
+      maxRecords: limits.maxRecords,
+    };
+  }
+
+  async function createRun(sourceId: string, mappingVersion: number, configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }>): Promise<SyncRunRow> {
+    const existing = await db.selectFrom("data_source_sync_runs").select(["id"])
+      .where("source_id", "=", sourceId).where("status", "=", "running").executeTakeFirst();
+    if (existing) throw new ApiFailure(409, "SYNC_ALREADY_RUNNING", "This source already has an active sync run.");
+    const now = new Date().toISOString();
+    const runId = randomUUID();
+    try {
+      await db.insertInto("data_source_sync_runs").values({
+        id: runId,
+        source_id: sourceId,
+        mapping_version: mappingVersion,
+        status: "running",
+        resumable: false,
+        request_succeeded: false,
+        config_fingerprint: syncConfigFingerprint(configuration),
+        checkpoint: JSON.stringify(initialCheckpoint(configuration.pagination)),
+        pages_completed: 0,
+        fetched: 0,
+        imported: 0,
+        duplicates: 0,
+        failed: 0,
+        errors: "[]",
+        errors_truncated: false,
+        last_error_code: null,
+        started_at: now,
+        updated_at: now,
+        completed_at: null,
+      }).execute();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "";
+      if ((isRecord(cause) && cause.code === "23505") || /UNIQUE constraint failed|unique constraint/i.test(message)) {
+        throw new ApiFailure(409, "SYNC_ALREADY_RUNNING", "This source already has an active sync run.");
+      }
+      throw cause;
+    }
+    const run = await getSyncRun(db, runId);
+    if (!run) throw new ApiFailure(500, "SYNC_RUN_CREATE_FAILED", "The sync run could not be created.");
+    return run;
+  }
+
+  function execute(source: Awaited<ReturnType<typeof loadEnabledRestSource>>, run: SyncRunRow) {
+    return executeSyncRun(
+      db,
+      { id: source.id, sourceKey: source.sourceKey, configuration: source.configuration },
+      source.mapping,
+      run,
+      source.endpoint,
+      source.token ? `Bearer ${source.token}` : undefined,
+      source.timeoutMs,
+      source.maxResponseBytes,
+      source.maxRecords,
+      policy,
+    );
+  }
+
   app.post<{ Params: { id: string }; Body: unknown }>(
     "/api/v1/data-sources/:id/sync",
     async (request): Promise<RestSyncResult> => {
-      if (!SOURCE_ID_PATTERN.test(request.params.id)) {
-        throw new ApiFailure(400, "INVALID_ID", "A valid data-source identifier is required.");
-      }
-      if (request.body !== undefined) {
-        throw new ApiFailure(400, "REQUEST_BODY_NOT_ALLOWED", "This sync action does not accept a request body.");
-      }
-      const source = await db
-        .selectFrom("data_sources")
-        .select(["id", "source_type", "enabled", "configuration"])
-        .where("id", "=", request.params.id)
-        .executeTakeFirst();
-      if (!source) throw new ApiFailure(404, "NOT_FOUND", "Data source not found.");
-      if (source.source_type !== "rest_api") {
-        throw new ApiFailure(409, "UNSUPPORTED_SOURCE_TYPE", "Only REST API sources can be synced.");
-      }
-      if (!source.enabled) throw new ApiFailure(409, "SOURCE_DISABLED", "Enable this source before syncing.");
-      if (source.configuration.kind !== "rest_api") {
-        throw new ApiFailure(409, "SOURCE_CONFIGURATION_INVALID", "The REST source configuration is invalid.");
-      }
-      const configuration = source.configuration;
-      if (
-        (configuration.method !== undefined && configuration.method !== "GET") ||
-        (configuration.responseFormat !== undefined && configuration.responseFormat !== "json") ||
-        (configuration.authMode !== undefined && configuration.authMode !== "none" && configuration.authMode !== "bearer")
-      ) {
-        return configurationFailure(source.id, "SOURCE_CONFIGURATION_INVALID", "The REST source configuration is not supported.");
-      }
-      const url = endpointUrl(configuration);
-      const limits = validateLimits(configuration);
-      if (!url || !limits) {
-        return configurationFailure(source.id, "SOURCE_CONFIGURATION_INVALID", "Configure a valid endpoint path and bounded request limits.");
-      }
-      const mapping = await getActiveEventMapping(db, source.id);
-      if (!mapping) {
-        throw new ApiFailure(409, "ACTIVE_MAPPING_REQUIRED", "Activate an event mapping before syncing this REST source.");
-      }
-      if (configuration.authMode === "bearer" && url.protocol !== "https:") {
-        return configurationFailure(source.id, "BEARER_REQUIRES_HTTPS", "Bearer authentication requires HTTPS.");
-      }
-      const token = parseBearerToken(configuration);
-      if (configuration.authMode === "bearer" && !token) {
-        return configurationFailure(source.id, "BEARER_TOKEN_UNAVAILABLE", "The configured bearer-token environment variable is not available.");
-      }
+      if (request.body !== undefined) throw new ApiFailure(400, "REQUEST_BODY_NOT_ALLOWED", "This sync action does not accept a request body.");
+      const source = await loadEnabledRestSource(request.params.id);
+      const run = await createRun(source.id, source.mapping.version, source.configuration);
+      return execute(source, run);
+    },
+  );
 
-      let responseBytes: Buffer;
-      try {
-      responseBytes = await requestJsonWithRetry(
-        url,
-        token ? `Bearer ${token}` : undefined,
-        limits.timeoutMs,
-        limits.maxResponseBytes,
-        policy,
-      );
-      } catch (cause) {
-        const safeError = cause instanceof RestRequestError
-          ? cause
-          : new RestRequestError("REST_REQUEST_FAILED", "The remote request failed.");
-        return failureResult(source.id, safeError);
-      }
+  app.get<{ Params: { id: string } }>("/api/v1/data-sources/:id/sync-runs", async (request) => {
+    if (!SOURCE_ID_PATTERN.test(request.params.id)) throw new ApiFailure(400, "INVALID_ID", "A valid data-source identifier is required.");
+    const source = await db.selectFrom("data_sources").select(["id", "source_type"]).where("id", "=", request.params.id).executeTakeFirst();
+    if (!source) throw new ApiFailure(404, "NOT_FOUND", "Data source not found.");
+    if (source.source_type !== "rest_api") throw new ApiFailure(409, "UNSUPPORTED_SOURCE_TYPE", "Sync history is available for REST API sources.");
+    const rows = await db.selectFrom("data_source_sync_runs").selectAll()
+      .where("source_id", "=", source.id).orderBy("started_at", "desc").orderBy("id", "desc").limit(25).execute() as SyncRunRow[];
+    return { items: rows.map(runResult) };
+  });
 
-      let responseJson: unknown;
-      try {
-        responseJson = JSON.parse(responseBytes.toString("utf8"));
-      } catch {
-        return failureResult(
-          source.id,
-          new RestRequestError("REST_INVALID_JSON", "The remote response was not valid JSON."),
-        );
+  app.post<{ Params: { id: string; runId: string }; Body: unknown }>(
+    "/api/v1/data-sources/:id/sync-runs/:runId/resume",
+    async (request): Promise<RestSyncResult> => {
+      if (request.body !== undefined) throw new ApiFailure(400, "REQUEST_BODY_NOT_ALLOWED", "This resume action does not accept a request body.");
+      const source = await loadEnabledRestSource(request.params.id);
+      if (!SOURCE_ID_PATTERN.test(request.params.runId)) throw new ApiFailure(400, "INVALID_ID", "A valid sync-run identifier is required.");
+      let run = await getSyncRun(db, request.params.runId);
+      if (!run || run.source_id !== source.id) throw new ApiFailure(404, "NOT_FOUND", "Sync run not found.");
+      const staleRunning = run.status === "running" && Date.now() - new Date(run.updated_at).getTime() > 60_000;
+      if (staleRunning) {
+        await db.updateTable("data_source_sync_runs").set({
+          status: "paused",
+          resumable: true,
+          updated_at: new Date().toISOString(),
+        }).where("id", "=", run.id).where("status", "=", "running").execute();
+        run = await getSyncRun(db, run.id);
+        if (!run) throw new ApiFailure(404, "NOT_FOUND", "Sync run not found.");
       }
-      const recordsValue = configuration.recordsPath
-        ? (isRecord(responseJson) ? readMappedField(responseJson as JsonObject, configuration.recordsPath) : undefined)
-        : responseJson;
-      if (!Array.isArray(recordsValue)) {
-        return failureResult(
-          source.id,
-          new RestRequestError("REST_RECORDS_PATH_INVALID", "The configured JSON path did not contain an array of records."),
-        );
+      if (!run.resumable || (run.status !== "paused" && run.status !== "failed")) {
+        throw new ApiFailure(409, "SYNC_RUN_NOT_RESUMABLE", "This sync run cannot be resumed.");
       }
-      if (recordsValue.length > limits.maxRecords) {
-        return {
-          sourceId: source.id,
-          requestSucceeded: true,
-          fetched: recordsValue.length,
-          imported: 0,
-          duplicates: 0,
-          failed: recordsValue.length,
-          errors: [{
-            record: 0,
-            code: "REST_RECORD_LIMIT_EXCEEDED",
-            message: `The response contained ${recordsValue.length} records; the configured limit is ${limits.maxRecords}.`,
-          }],
-          errorsTruncated: false,
-        };
+      if (run.config_fingerprint !== syncConfigFingerprint(source.configuration)) {
+        throw new ApiFailure(409, "SYNC_CONFIGURATION_CHANGED", "The source pagination or record-selection configuration changed; start a new sync run.");
       }
-
-      let imported = 0;
-      let duplicates = 0;
-      let failed = 0;
-      const errors: RestSyncRecordError[] = [];
-      for (let index = 0; index < recordsValue.length; index += 1) {
-        const record = recordsValue[index];
-        const recordNumber = index + 1;
-        try {
-          if (!isRecord(record)) {
-            throw new ApiFailure(400, "INVALID_REMOTE_RECORD", "The remote item must be a JSON object.");
-          }
-          const rawRecord = record as JsonObject;
-          const normalized = await normalizeMappedEvent(
-            db,
-            source.id,
-            rawRecord,
-            basePayload(rawRecord),
-            mapping,
-            fallbackKey(source.id, rawRecord),
-            { connector: "rest_api", responseFormat: "json" },
-          );
-          const ingestion = await ingestEvent(db, normalized);
-          if (ingestion.duplicate) duplicates += 1;
-          else imported += 1;
-        } catch (cause) {
-          failed += 1;
-          if (errors.length < MAX_ERRORS) errors.push(recordError(recordNumber, cause));
-        }
+      if (source.mapping.version !== run.mapping_version) {
+        throw new ApiFailure(409, "SYNC_MAPPING_CHANGED", "The active event mapping changed; start a new sync run.");
       }
-      return {
-        sourceId: source.id,
-        requestSucceeded: true,
-        fetched: recordsValue.length,
-        imported,
-        duplicates,
-        failed,
-        errors,
-        errorsTruncated: failed > errors.length,
-      };
+      await db.updateTable("data_source_sync_runs").set({
+        status: "running",
+        resumable: false,
+        updated_at: new Date().toISOString(),
+        completed_at: null,
+      }).where("id", "=", run.id).where("status", "in", ["paused", "failed"]).execute();
+      const resumed = await getSyncRun(db, run.id);
+      if (!resumed) throw new ApiFailure(404, "NOT_FOUND", "Sync run not found.");
+      return execute(source, resumed);
     },
   );
 }

@@ -392,10 +392,56 @@ paths:
         The bounded JSON response is normalized and ingested through the
         existing event pipeline. DNS results and every redirect destination
         are checked against SSRF rules. Request failures are returned as
-        requestSucceeded=false with sanitized errors; no run history is stored.
+        a stored failed run with sanitized errors. Pagination, checkpoints, and
+        explicit resume are enabled only when configured.
       responses:
         "200":
           description: Sync counts and sanitized request or record errors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestSyncResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/data-sources/{id}/sync-runs:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [Data sources]
+      operationId: listRestSyncRuns
+      summary: List recent REST sync runs
+      responses:
+        "200":
+          description: Up to 25 runs with counts, sanitized errors, and resumability.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestSyncRunsResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/data-sources/{id}/sync-runs/{runId}/resume:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: runId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Data sources]
+      operationId: resumeRestSyncRun
+      summary: Resume a paused or retryable REST sync run
+      description: Requires unchanged pagination configuration and active mapping version. Checkpoints and cursor values are not returned.
+      responses:
+        "200":
+          description: Updated run progress and sanitized errors.
           content:
             application/json:
               schema:
@@ -954,6 +1000,61 @@ components:
       minLength: 1
       maxLength: 80
       pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+    RestPaginationConfiguration:
+      type: object
+      additionalProperties: false
+      required: [strategy, pageSize, limitParameter]
+      properties:
+        strategy:
+          type: string
+          enum: [offset, page, cursor]
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        limitParameter:
+          type: string
+          pattern: "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+        requestIntervalMs:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          default: 250
+        startOffset:
+          type: integer
+          minimum: 0
+          maximum: 1000000000
+        startPage:
+          type: integer
+          minimum: 0
+          maximum: 1000000000
+        offsetParameter:
+          type: string
+          pattern: "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+        pageParameter:
+          type: string
+          pattern: "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+        cursorParameter:
+          type: string
+          pattern: "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+        nextCursorPath:
+          type: string
+          minLength: 1
+          maxLength: 256
+        dateFromParameter:
+          type: string
+          pattern: "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+        dateFrom:
+          type: string
+          maxLength: 128
+          description: Passed to the API as entered without timezone inference or conversion.
+        dateToParameter:
+          type: string
+          pattern: "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+        dateTo:
+          type: string
+          maxLength: 128
+          description: Passed to the API as entered without timezone inference or conversion.
     DataSourceConfigurationInput:
       oneOf:
         - type: object
@@ -996,7 +1097,7 @@ components:
             maxRecords:
               type: integer
               minimum: 1
-              maximum: 1000
+              maximum: 100000
               default: 500
             responseFormat:
               type: string
@@ -1006,6 +1107,8 @@ components:
               type: string
               maxLength: 256
               description: Dot path to the records array; blank means a top-level array.
+            pagination:
+              $ref: "#/components/schemas/RestPaginationConfiguration"
         - type: object
           additionalProperties: false
           required: [kind, relativePath]
@@ -1070,6 +1173,8 @@ components:
               enum: [json]
             recordsPath:
               type: string
+            pagination:
+              $ref: "#/components/schemas/RestPaginationConfiguration"
         - type: object
           required: [kind, relativePath]
           properties:
@@ -1416,16 +1521,40 @@ components:
           type: object
           additionalProperties:
             type: string
+    RestSyncRunsResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 25
+          items:
+            $ref: "#/components/schemas/RestSyncResult"
     RestSyncResult:
       type: object
-      required: [sourceId, requestSucceeded, fetched, imported, duplicates, failed, errors, errorsTruncated]
+      required: [runId, sourceId, mappingVersion, status, requestSucceeded, pagesCompleted, fetched, imported, duplicates, failed, errors, errorsTruncated, startedAt, updatedAt, completedAt, resumable]
       properties:
+        runId:
+          type: string
+          format: uuid
         sourceId:
           type: string
           format: uuid
+        mappingVersion:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [running, completed, paused, failed]
+        resumable:
+          type: boolean
+          description: Indicates whether explicit resume is permitted with the current mapping and source configuration.
         requestSucceeded:
           type: boolean
-          description: False when the remote request or response could not be used.
+          description: True if at least one page request succeeded.
+        pagesCompleted:
+          type: integer
+          minimum: 0
         fetched:
           type: integer
           minimum: 0
@@ -1444,6 +1573,15 @@ components:
             $ref: "#/components/schemas/RestSyncRecordError"
         errorsTruncated:
           type: boolean
+        startedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, "null"]
+          format: date-time
     RestSyncRecordError:
       type: object
       required: [record, code, message]

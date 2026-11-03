@@ -24,13 +24,17 @@ test(
       await runMigrations(pool, migrationsDirectory);
       assert.deepEqual(await runMigrations(pool, migrationsDirectory), []);
       const result = await pool.query<{ name: string }>(
-        "SELECT name FROM kudu.schema_migrations WHERE name IN ($1, $2) ORDER BY name",
-        ["0001_create_kudu_schema.sql", "0002_asset_and_data_source_registries.sql"],
+        "SELECT name FROM kudu.schema_migrations WHERE name IN ($1, $2, $3) ORDER BY name",
+        ["0001_create_kudu_schema.sql", "0002_asset_and_data_source_registries.sql", "0005_data_source_sync_runs.sql"],
       );
       assert.deepEqual(
         result.rows.map((row) => row.name),
-        ["0001_create_kudu_schema.sql", "0002_asset_and_data_source_registries.sql"],
+        ["0001_create_kudu_schema.sql", "0002_asset_and_data_source_registries.sql", "0005_data_source_sync_runs.sql"],
       );
+      const table = await pool.query<{ table_name: string | null }>(
+        "SELECT to_regclass('kudu.data_source_sync_runs')::text AS table_name",
+      );
+      assert.equal(table.rows[0]?.table_name, "kudu.data_source_sync_runs");
     } finally {
       await pool.end();
     }

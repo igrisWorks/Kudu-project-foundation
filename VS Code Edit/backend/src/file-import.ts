@@ -7,7 +7,14 @@ import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database, StoredSourceConfiguration } from "./database.js";
 import { ApiFailure } from "./errors.js";
-import { getActiveEventMapping, normalizeMappedEvent, readMappedField, type ActiveEventMapping } from "./event-mappings.js";
+import {
+  getActiveEventMapping,
+  loadAssetMatchContext,
+  normalizeMappedEvent,
+  readMappedField,
+  type ActiveEventMapping,
+  type AssetMatchContext,
+} from "./event-mappings.js";
 import { ingestEvent } from "./events.js";
 
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
@@ -234,6 +241,7 @@ async function applyActiveMapping(
   format: ImportFormat,
   recordNumber: number,
   relativePath: string,
+  assetMatchContext?: AssetMatchContext,
 ): Promise<JsonRecord> {
   const sourceId = prepared.input.sourceId;
   if (typeof sourceId !== "string") throw recordFailure("The source identifier is invalid.");
@@ -245,6 +253,7 @@ async function applyActiveMapping(
     mapping,
     fallbackDeduplicationKey(relativePath, recordNumber),
     { importFormat: format },
+    assetMatchContext,
   );
 }
 
@@ -486,11 +495,17 @@ async function processImport(
     errors: [],
     errorsTruncated: false,
   };
+  const sourceKey = activeMapping?.definition.assetKey
+    ? await db.selectFrom("data_sources").select("source_key").where("id", "=", sourceId).executeTakeFirst()
+    : undefined;
+  const assetMatchContext = activeMapping?.definition.assetKey && sourceKey
+    ? await loadAssetMatchContext(db, sourceKey.source_key)
+    : undefined;
   for (const item of inputs) {
     try {
       const prepared = item.buildInput();
       const input = activeMapping
-        ? await applyActiveMapping(db, prepared, activeMapping, format, item.record, relativePath)
+        ? await applyActiveMapping(db, prepared, activeMapping, format, item.record, relativePath, assetMatchContext)
         : prepared.input;
       const response = await ingestEvent(db, input);
       if (response.duplicate) result.skipped += 1;

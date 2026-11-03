@@ -93,6 +93,56 @@ test("REST configuration permits only safe HTTP metadata and environment referen
   );
 });
 
+test("REST pagination is opt-in and validates bounded strategies and parameters", () => {
+  const base = {
+    sourceKey: "history",
+    displayName: "Historical API",
+    sourceType: "rest_api",
+    configuration: {
+      kind: "rest_api",
+      baseUrl: "https://erp.example.test/api",
+      endpointPath: "events",
+      maxRecords: 100_000,
+      pagination: {
+        strategy: "cursor",
+        pageSize: 250,
+        limitParameter: "limit",
+        cursorParameter: "cursor",
+        nextCursorPath: "page.next",
+        requestIntervalMs: 300,
+        dateFromParameter: "from",
+        dateFrom: "2026-01-01",
+      },
+    },
+  };
+  const validated = validateDataSourceCreate(base);
+  assert.equal(validated.configuration.kind, "rest_api");
+  if (validated.configuration.kind === "rest_api") {
+    assert.deepEqual(validated.configuration.pagination, base.configuration.pagination);
+  }
+  expectValidationFailure(() => validateDataSourceCreate({
+    ...base,
+    configuration: {
+      ...base.configuration,
+      maxRecords: 100_001,
+    },
+  }));
+  expectValidationFailure(() => validateDataSourceCreate({
+    ...base,
+    configuration: {
+      ...base.configuration,
+      pagination: { ...base.configuration.pagination, cursorParameter: "bad&cursor" },
+    },
+  }));
+  expectValidationFailure(() => validateDataSourceCreate({
+    ...base,
+    configuration: {
+      ...base.configuration,
+      pagination: { ...base.configuration.pagination, nextCursorPath: "__proto__.next" },
+    },
+  }));
+});
+
 test("file source paths must stay relative to their configured data root", () => {
   const base = {
     sourceKey: "archive",

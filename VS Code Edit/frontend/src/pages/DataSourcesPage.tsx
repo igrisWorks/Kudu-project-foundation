@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceDiscoveryResult, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page, type RestApiAuthMode, type RestSyncResult, type SuggestedTargetField } from "@kudu/shared";
-import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, discoverDataSource, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, syncRestDataSource, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
+import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceDiscoveryResult, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page, type RestApiAuthMode, type RestPaginationConfiguration, type RestSyncResult, type SuggestedTargetField } from "@kudu/shared";
+import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, discoverDataSource, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, listRestSyncRuns, resumeRestSyncRun, syncRestDataSource, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
 import { ConnectorBadge, displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
 const PAGE_SIZE = 15;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+type PaginationMode = "" | "offset" | "page" | "cursor";
 const sourceLabels: Record<DataSourceType, string> = {
   rest_api: "REST API", json_file: "JSON file", csv_file: "CSV file", manual: "Manual",
 };
@@ -70,7 +71,7 @@ function DataSourceListPage() {
           <td><Link className="record-link mono" href={`/data-sources/${encodeURIComponent(source.id)}`} data-testid={`link-data-source-${source.id}`}>{source.sourceKey}</Link><br /><Link className="record-link" href={`/data-sources/${encodeURIComponent(source.id)}`} data-testid={`link-data-source-name-${source.id}`}>{source.displayName}</Link></td>
           <td>{sourceLabels[source.sourceType]}</td><td><span className={`status-pill ${source.enabled ? "good" : ""}`}>{source.enabled ? "ENABLED" : "DISABLED"}</span></td>
           <td>{source.sourceType === "rest_api" ? <span className="status-pill good">ON-DEMAND</span> : <ConnectorBadge status={source.connectionStatus} />}</td>
-          <td className="time-label">{source.sourceType === "rest_api" ? "Not tracked" : formatDate(source.lastSuccessfulSyncAt)}</td>
+          <td className="time-label">{formatDate(source.lastSuccessfulSyncAt)}</td>
         </tr>)}</tbody>
       </table></div>
       <ListPagination page={page} maxPage={maxPage} total={result.total} onChange={setPage} testId="data-sources" />
@@ -99,9 +100,24 @@ function DataSourceDetailPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [syncResult, setSyncResult] = useState<RestSyncResult | null>(null);
+  const [syncRuns, setSyncRuns] = useState<RestSyncResult[]>([]);
+  const [syncHistoryError, setSyncHistoryError] = useState("");
   const load = useCallback(async () => {
     setLoading(true); setError("");
-    try { setRecord(await getDataSource(id)); } catch (cause) { setError(displayError(cause)); }
+    try {
+      const source = await getDataSource(id);
+      setRecord(source);
+      if (source.sourceType === "rest_api") {
+        try {
+          setSyncRuns((await listRestSyncRuns(id)).items);
+          setSyncHistoryError("");
+        } catch (cause) {
+          setSyncHistoryError(displayError(cause));
+        }
+      } else {
+        setSyncRuns([]);
+      }
+    } catch (cause) { setError(displayError(cause)); }
     finally { setLoading(false); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
@@ -113,8 +129,21 @@ function DataSourceDetailPage() {
   }
   async function runRestSync() {
     setSyncing(true); setSyncError(""); setSyncResult(null);
-    try { setSyncResult(await syncRestDataSource(id)); }
+    try {
+      const result = await syncRestDataSource(id);
+      setSyncResult(result);
+      setSyncRuns(current => [result, ...current.filter(run => run.runId !== result.runId)].slice(0, 25));
+    }
     catch (cause) { setSyncError(displayError(cause)); }
+    finally { setSyncing(false); }
+  }
+  async function resumeRestSync(runId: string) {
+    setSyncing(true); setSyncError(""); setSyncResult(null);
+    try {
+      const result = await resumeRestSyncRun(id, runId);
+      setSyncResult(result);
+      setSyncRuns(current => [result, ...current.filter(run => run.runId !== result.runId)].slice(0, 25));
+    } catch (cause) { setSyncError(displayError(cause)); }
     finally { setSyncing(false); }
   }
   if (loading) return <main className="page-main"><LoadingState label="Loading the actual data source record…" /></main>;
@@ -164,10 +193,11 @@ function DataSourceDetailPage() {
       {importResult.errorsTruncated && <p className="field-hint">Only the first {importResult.errors.length} record errors are displayed.</p>}
     </section>}
     {syncResult && <section className="panel file-import-result" data-testid="panel-rest-sync-result">
-      <h2 className="panel-title">REST sync · {syncResult.requestSucceeded ? (syncResult.failed ? "completed with failures" : "completed") : "request failed"}</h2>
+      <h2 className="panel-title">REST sync · {syncResult.status === "paused" ? "paused for continuation" : syncResult.status === "failed" ? "stopped with an error" : syncResult.failed ? "completed with record failures" : "completed"}</h2>
       <p data-testid="text-rest-sync-counts">
-        {syncResult.fetched} fetched, {syncResult.imported} imported, {syncResult.duplicates} duplicates, {syncResult.failed} failed.
+        {syncResult.pagesCompleted} pages · {syncResult.fetched} fetched · {syncResult.imported} imported · {syncResult.duplicates} duplicates · {syncResult.failed} failed.
       </p>
+      <p className="field-hint">Run {syncResult.runId} · mapping version {syncResult.mappingVersion} · request {syncResult.requestSucceeded ? "succeeded" : "not yet successful"}.</p>
       {syncResult.errors.length > 0 && <ul className="file-import-errors" data-testid="list-rest-sync-errors">
         {syncResult.errors.map((item, index) => <li key={`${item.record}-${item.code}-${index}`}>
           <strong>{item.record === 0 ? "Request" : `Record ${item.record}`} · {item.code}</strong>: {item.message}
@@ -175,6 +205,34 @@ function DataSourceDetailPage() {
         </li>)}
       </ul>}
       {syncResult.errorsTruncated && <p className="field-hint">Only the first {syncResult.errors.length} errors are displayed.</p>}
+    </section>}
+    {isRestSource && <section className="panel" data-testid="panel-rest-sync-history">
+      <h2 className="panel-title">Recent sync runs</h2>
+      <p className="field-hint">History is stored locally and loaded when this page opens. Remote APIs are never polled.</p>
+      {syncHistoryError && <div className="notice error" role="alert">{syncHistoryError}</div>}
+      {syncRuns.length === 0
+        ? <p className="muted">No sync runs are recorded for this source.</p>
+        : <ul className="sync-run-list">{syncRuns.map(run => {
+          const recoverStale = run.status === "running" && Date.now() - new Date(run.updatedAt).getTime() > 60_000;
+          const canResume = run.resumable || recoverStale;
+          return <li key={run.runId} data-testid={`sync-run-${run.runId}`}>
+            <div className="sync-run-heading">
+              <span className={`status-pill ${run.status === "completed" ? "good" : ""}`}>{recoverStale ? "PAUSED · INTERRUPTED" : run.status.toUpperCase()}</span>
+              <span className="time-label">{formatDate(run.startedAt)}</span>
+            </div>
+            <p>{run.pagesCompleted} pages · {run.fetched} fetched · {run.imported} imported · {run.duplicates} duplicates · {run.failed} failed</p>
+            <p className="field-hint">Mapping version {run.mappingVersion} · run {run.runId}</p>
+            {run.errors.length > 0 && <details>
+              <summary>{run.errors.length} recorded errors{run.errorsTruncated ? " (truncated)" : ""}</summary>
+              <ul className="file-import-errors">{run.errors.map((item, index) => <li key={`${item.record}-${item.code}-${index}`}>
+                <strong>{item.record === 0 ? "Request" : `Record ${item.record}`} · {item.code}</strong>: {item.message}
+              </li>)}</ul>
+            </details>}
+            {canResume && <button className="button" type="button" onClick={() => void resumeRestSync(run.runId)} disabled={syncing}>
+              {syncing ? "Resuming…" : recoverStale ? "Recover interrupted run" : "Resume run"}
+            </button>}
+          </li>;
+        })}</ul>}
     </section>}
     <div className="detail-grid">
       <section className="panel"><h2 className="panel-title">Source metadata</h2><dl className="definition-list">
@@ -196,6 +254,9 @@ function DataSourceDetailPage() {
               ? cfg.credentialConfigured ? "Bearer token via environment variable is configured." : "Bearer token reference is unavailable."
               : cfg.credentialConfigured ? "No authentication; an inactive credential reference is recorded." : "None."}</dd>
             <dt>Request limits</dt><dd>{cfg.timeoutMs ?? 10000} ms · {((cfg.maxResponseBytes ?? 1048576) / 1048576).toFixed(1)} MiB · {cfg.maxRecords ?? 500} records</dd>
+            <dt>Pagination</dt><dd>{cfg.pagination
+              ? `${cfg.pagination.strategy} · ${cfg.pagination.pageSize} records/page · up to 3 pages per action`
+              : "Single response; pagination not configured"}</dd>
           </>}
           {(cfg.kind === "json_file" || cfg.kind === "csv_file") && <><dt>Relative path</dt><dd className="mono" data-testid="text-source-path">{cfg.relativePath}</dd>{cfg.kind === "json_file" && <><dt>Records path</dt><dd className="mono">{cfg.recordsPath || "Top-level JSON array"}</dd></>}</>}
           {cfg.kind === "manual" && <><dt>Reference</dt><dd>{cfg.referenceOnly ? "Manual reference only" : "Not available"}</dd></>}
@@ -209,7 +270,9 @@ function DataSourceDetailPage() {
         : isRestSource
           ? <section className="panel" data-testid="panel-rest-sync-status"><h2 className="panel-title">REST sync</h2><dl className="definition-list">
             <dt>Availability</dt><dd>{record.enabled ? "Available for operator-triggered sync" : "Disabled in registry"}</dd>
-            <dt>Run history</dt><dd>Not stored; each result is returned after the request.</dd>
+             <dt>Last sync</dt><dd className="time-label">{formatDate(record.lastSuccessfulSyncAt)}</dd>
+             <dt>Last error</dt><dd>{record.lastErrorSummary || <span className="muted">No error reported</span>}</dd>
+             <dt>Run history</dt><dd>Stored with page checkpoints and mapping-version lineage.</dd>
           </dl></section>
           : <section className="panel"><h2 className="panel-title">Connector and ingestion status</h2><dl className="definition-list">
             <dt>Connection</dt><dd><ConnectorBadge status={record.connectionStatus} /></dd><dt>Ingestion</dt><dd><ConnectorBadge status={record.ingestionStatus} /></dd>
@@ -555,6 +618,14 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   const [endpointPath, setEndpointPath] = useState(""); const [recordsPath, setRecordsPath] = useState("");
   const [authMode, setAuthMode] = useState<RestApiAuthMode>("none");
   const [timeoutMs, setTimeoutMs] = useState("10000"); const [maxResponseBytes, setMaxResponseBytes] = useState("1048576"); const [maxRecords, setMaxRecords] = useState("500");
+  const [paginationMode, setPaginationMode] = useState<PaginationMode>("");
+  const [pageSize, setPageSize] = useState("100"); const [limitParameter, setLimitParameter] = useState("limit");
+  const [requestIntervalMs, setRequestIntervalMs] = useState("250");
+  const [offsetParameter, setOffsetParameter] = useState("offset"); const [startOffset, setStartOffset] = useState("0");
+  const [pageParameter, setPageParameter] = useState("page"); const [startPage, setStartPage] = useState("1");
+  const [cursorParameter, setCursorParameter] = useState("cursor"); const [nextCursorPath, setNextCursorPath] = useState("nextCursor");
+  const [dateFromParameter, setDateFromParameter] = useState(""); const [dateFrom, setDateFrom] = useState("");
+  const [dateToParameter, setDateToParameter] = useState(""); const [dateTo, setDateTo] = useState("");
   const [credentialRef, setCredentialRef] = useState(""); const [credentialConfigured, setCredentialConfigured] = useState(false);
   const [clearCredential, setClearCredential] = useState(false); const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
@@ -581,6 +652,34 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   function configurationFromForm(): DataSourceConfigurationInput {
     if (type === "rest_api") {
       const credential: { credentialRef?: string | null } = {};
+      let pagination: RestPaginationConfiguration | undefined;
+      const dateRange = {
+        ...(dateFromParameter.trim() && dateFrom.trim()
+          ? { dateFromParameter: dateFromParameter.trim(), dateFrom: dateFrom.trim() }
+          : {}),
+        ...(dateToParameter.trim() && dateTo.trim()
+          ? { dateToParameter: dateToParameter.trim(), dateTo: dateTo.trim() }
+          : {}),
+      };
+      if (paginationMode === "offset") {
+        pagination = {
+          strategy: "offset", pageSize: Number(pageSize), limitParameter: limitParameter.trim(),
+          requestIntervalMs: Number(requestIntervalMs), offsetParameter: offsetParameter.trim(),
+          startOffset: Number(startOffset), ...dateRange,
+        };
+      } else if (paginationMode === "page") {
+        pagination = {
+          strategy: "page", pageSize: Number(pageSize), limitParameter: limitParameter.trim(),
+          requestIntervalMs: Number(requestIntervalMs), pageParameter: pageParameter.trim(),
+          startPage: Number(startPage), ...dateRange,
+        };
+      } else if (paginationMode === "cursor") {
+        pagination = {
+          strategy: "cursor", pageSize: Number(pageSize), limitParameter: limitParameter.trim(),
+          requestIntervalMs: Number(requestIntervalMs), cursorParameter: cursorParameter.trim(),
+          nextCursorPath: nextCursorPath.trim(), ...dateRange,
+        };
+      }
       if (clearCredential) credential.credentialRef = null;
       else if (credentialRef.trim()) credential.credentialRef = credentialRef.trim();
       return {
@@ -594,6 +693,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         maxRecords: Number(maxRecords),
         responseFormat: "json",
         recordsPath: recordsPath.trim(),
+        ...(pagination ? { pagination } : {}),
         ...credential,
       };
     }
@@ -659,6 +759,23 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         setTimeoutMs(String(record.configuration.timeoutMs ?? 10000));
         setMaxResponseBytes(String(record.configuration.maxResponseBytes ?? 1048576));
         setMaxRecords(String(record.configuration.maxRecords ?? 500));
+        const pagination = record.configuration.pagination;
+        setPaginationMode(pagination?.strategy ?? "");
+        if (pagination) {
+          setPageSize(String(pagination.pageSize));
+          setLimitParameter(pagination.limitParameter);
+          setRequestIntervalMs(String(pagination.requestIntervalMs ?? 250));
+          setOffsetParameter(pagination.offsetParameter ?? "offset");
+          setStartOffset(String(pagination.startOffset ?? 0));
+          setPageParameter(pagination.pageParameter ?? "page");
+          setStartPage(String(pagination.startPage ?? 1));
+          setCursorParameter(pagination.cursorParameter ?? "cursor");
+          setNextCursorPath(pagination.nextCursorPath ?? "nextCursor");
+          setDateFromParameter(pagination.dateFromParameter ?? "");
+          setDateFrom(pagination.dateFrom ?? "");
+          setDateToParameter(pagination.dateToParameter ?? "");
+          setDateTo(pagination.dateTo ?? "");
+        }
         setCredentialConfigured(record.configuration.credentialConfigured);
       }
       if (record.configuration.kind === "json_file") {
@@ -684,7 +801,44 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       const timeout = Number(timeoutMs); const responseLimit = Number(maxResponseBytes); const recordLimit = Number(maxRecords);
       if (!Number.isInteger(timeout) || timeout < 500 || timeout > 30000) errors.timeoutMs = "Use a whole number from 500 to 30000.";
       if (!Number.isInteger(responseLimit) || responseLimit < 1024 || responseLimit > 5242880) errors.maxResponseBytes = "Use a whole number from 1024 to 5242880.";
-      if (!Number.isInteger(recordLimit) || recordLimit < 1 || recordLimit > 1000) errors.maxRecords = "Use a whole number from 1 to 1000.";
+      if (!Number.isInteger(recordLimit) || recordLimit < 1 || recordLimit > 100000) errors.maxRecords = "Use a whole number from 1 to 100000.";
+      if (paginationMode) {
+        const parameterPattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+        const parameters = [limitParameter.trim()];
+        if (!Number.isInteger(Number(pageSize)) || Number(pageSize) < 1 || Number(pageSize) > 1000) errors.pageSize = "Use a page size from 1 to 1000.";
+        if (!parameterPattern.test(limitParameter.trim())) errors.limitParameter = "Use a safe query parameter name.";
+        if (!Number.isInteger(Number(requestIntervalMs)) || Number(requestIntervalMs) < 0 || Number(requestIntervalMs) > 10000) errors.requestIntervalMs = "Use a whole number from 0 to 10000.";
+        if (paginationMode === "offset") {
+          parameters.push(offsetParameter.trim());
+          if (!parameterPattern.test(offsetParameter.trim())) errors.offsetParameter = "Use a safe query parameter name.";
+          if (!Number.isInteger(Number(startOffset)) || Number(startOffset) < 0 || Number(startOffset) > 1_000_000_000) errors.startOffset = "Use a whole number from 0 to 1000000000.";
+        }
+        if (paginationMode === "page") {
+          parameters.push(pageParameter.trim());
+          if (!parameterPattern.test(pageParameter.trim())) errors.pageParameter = "Use a safe query parameter name.";
+          if (!Number.isInteger(Number(startPage)) || Number(startPage) < 0 || Number(startPage) > 1_000_000_000) errors.startPage = "Use a whole number from 0 to 1000000000.";
+        }
+        if (paginationMode === "cursor") {
+          parameters.push(cursorParameter.trim());
+          if (!parameterPattern.test(cursorParameter.trim())) errors.cursorParameter = "Use a safe query parameter name.";
+          const parts = nextCursorPath.trim().split(".");
+          if (!nextCursorPath.trim() || parts.length > 8 || parts.some(part => !/^[A-Za-z0-9_-]{1,128}$/.test(part) || ["__proto__", "prototype", "constructor"].includes(part))) {
+            errors.nextCursorPath = "Enter a safe dot-separated path for the next cursor.";
+          }
+        }
+        if (new Set(parameters).size !== parameters.length) errors.limitParameter = "Pagination query parameter names must be distinct.";
+        const dateFromConfigured = Boolean(dateFromParameter.trim() || dateFrom.trim());
+        if (dateFromConfigured && (!parameterPattern.test(dateFromParameter.trim()) || !dateFrom.trim() || dateFrom.length > 128 || /[\r\n\0]/.test(dateFrom))) {
+          errors.dateFrom = "Set a valid query parameter and value for the start date.";
+        }
+        const dateToConfigured = Boolean(dateToParameter.trim() || dateTo.trim());
+        if (dateToConfigured && (!parameterPattern.test(dateToParameter.trim()) || !dateTo.trim() || dateTo.length > 128 || /[\r\n\0]/.test(dateTo))) {
+          errors.dateTo = "Set a valid query parameter and value for the end date.";
+        }
+        if (dateFromParameter.trim()) parameters.push(dateFromParameter.trim());
+        if (dateToParameter.trim()) parameters.push(dateToParameter.trim());
+        if (new Set(parameters).size !== parameters.length) errors.limitParameter = "Pagination and date query parameter names must be distinct.";
+      }
     }
     if ((type === "json_file" || type === "csv_file") && !relativePath.trim()) errors.relativePath = "Relative path is required.";
     setFieldErrors(errors); setValidation(Object.keys(errors).length ? "Review the fields marked below." : "");
@@ -796,7 +950,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         </div>
         <div className="field">
           <label htmlFor="rest-max-records">Maximum records</label>
-          <input id="rest-max-records" type="number" min="1" max="1000" step="1" value={maxRecords} onChange={event => changeConfiguration(setMaxRecords, event.target.value)} aria-invalid={Boolean(fieldErrors.maxRecords)} />
+          <input id="rest-max-records" type="number" min="1" max="100000" step="1" value={maxRecords} onChange={event => changeConfiguration(setMaxRecords, event.target.value)} aria-invalid={Boolean(fieldErrors.maxRecords)} />
           {fieldErrors.maxRecords && <span className="field-error">{fieldErrors.maxRecords}</span>}
         </div>
         <div className="field">
@@ -805,6 +959,63 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
           {fieldErrors.recordsPath && <span className="field-error">{fieldErrors.recordsPath}</span>}
           <span className="field-hint">Dot path to the array; leave blank when the response is an array.</span>
         </div>
+        <div className="form-section span-2">
+          <h2>Historical pagination</h2>
+          <p>Pagination is opt-in. Each manual sync processes at most three pages, stores its checkpoint, and can be resumed. No scheduled polling is performed.</p>
+        </div>
+        <div className="field">
+          <label htmlFor="rest-pagination-mode">Pagination strategy</label>
+          <select id="rest-pagination-mode" value={paginationMode} onChange={event => { setPaginationMode(event.target.value as PaginationMode); clearDiscovery(); }}>
+            <option value="">No pagination</option>
+            <option value="offset">Offset</option>
+            <option value="page">Page number</option>
+            <option value="cursor">Cursor</option>
+          </select>
+          <span className="field-hint">Use the exact pagination convention documented by the source API.</span>
+        </div>
+        {paginationMode && <>
+          <div className="field">
+            <label htmlFor="rest-page-size">Page size</label>
+            <input id="rest-page-size" type="number" min="1" max="1000" value={pageSize} onChange={event => changeConfiguration(setPageSize, event.target.value)} aria-invalid={Boolean(fieldErrors.pageSize)} />
+            {fieldErrors.pageSize && <span className="field-error">{fieldErrors.pageSize}</span>}
+          </div>
+          <div className="field">
+            <label htmlFor="rest-limit-parameter">Limit query parameter</label>
+            <input id="rest-limit-parameter" value={limitParameter} onChange={event => changeConfiguration(setLimitParameter, event.target.value)} aria-invalid={Boolean(fieldErrors.limitParameter)} />
+            {fieldErrors.limitParameter && <span className="field-error">{fieldErrors.limitParameter}</span>}
+          </div>
+          <div className="field">
+            <label htmlFor="rest-request-interval">Minimum interval between pages (ms)</label>
+            <input id="rest-request-interval" type="number" min="0" max="10000" value={requestIntervalMs} onChange={event => changeConfiguration(setRequestIntervalMs, event.target.value)} aria-invalid={Boolean(fieldErrors.requestIntervalMs)} />
+            {fieldErrors.requestIntervalMs && <span className="field-error">{fieldErrors.requestIntervalMs}</span>}
+            <span className="field-hint">HTTP 429 responses also honor Retry-After within the request timeout.</span>
+          </div>
+          {paginationMode === "offset" && <>
+            <div className="field"><label htmlFor="rest-offset-parameter">Offset query parameter</label><input id="rest-offset-parameter" value={offsetParameter} onChange={event => changeConfiguration(setOffsetParameter, event.target.value)} aria-invalid={Boolean(fieldErrors.offsetParameter)} />{fieldErrors.offsetParameter && <span className="field-error">{fieldErrors.offsetParameter}</span>}</div>
+            <div className="field"><label htmlFor="rest-start-offset">Starting offset</label><input id="rest-start-offset" type="number" min="0" value={startOffset} onChange={event => changeConfiguration(setStartOffset, event.target.value)} aria-invalid={Boolean(fieldErrors.startOffset)} />{fieldErrors.startOffset && <span className="field-error">{fieldErrors.startOffset}</span>}</div>
+          </>}
+          {paginationMode === "page" && <>
+            <div className="field"><label htmlFor="rest-page-parameter">Page-number query parameter</label><input id="rest-page-parameter" value={pageParameter} onChange={event => changeConfiguration(setPageParameter, event.target.value)} aria-invalid={Boolean(fieldErrors.pageParameter)} />{fieldErrors.pageParameter && <span className="field-error">{fieldErrors.pageParameter}</span>}</div>
+            <div className="field"><label htmlFor="rest-start-page">Starting page number</label><input id="rest-start-page" type="number" min="0" value={startPage} onChange={event => changeConfiguration(setStartPage, event.target.value)} aria-invalid={Boolean(fieldErrors.startPage)} />{fieldErrors.startPage && <span className="field-error">{fieldErrors.startPage}</span>}</div>
+          </>}
+          {paginationMode === "cursor" && <>
+            <div className="field"><label htmlFor="rest-cursor-parameter">Cursor query parameter</label><input id="rest-cursor-parameter" value={cursorParameter} onChange={event => changeConfiguration(setCursorParameter, event.target.value)} aria-invalid={Boolean(fieldErrors.cursorParameter)} />{fieldErrors.cursorParameter && <span className="field-error">{fieldErrors.cursorParameter}</span>}</div>
+            <div className="field"><label htmlFor="rest-next-cursor-path">Next cursor response path</label><input id="rest-next-cursor-path" value={nextCursorPath} onChange={event => changeConfiguration(setNextCursorPath, event.target.value)} aria-invalid={Boolean(fieldErrors.nextCursorPath)} /><span className="field-hint">For example, pagination.nextCursor. Cursor values are stored privately in the run checkpoint.</span>{fieldErrors.nextCursorPath && <span className="field-error">{fieldErrors.nextCursorPath}</span>}</div>
+          </>}
+          <div className="field">
+            <label htmlFor="rest-date-from-parameter">Optional start-date parameter</label>
+            <input id="rest-date-from-parameter" value={dateFromParameter} onChange={event => changeConfiguration(setDateFromParameter, event.target.value)} placeholder="from" aria-invalid={Boolean(fieldErrors.dateFrom)} />
+            <input aria-label="Start-date value" value={dateFrom} onChange={event => changeConfiguration(setDateFrom, event.target.value)} placeholder="API-specific value" aria-invalid={Boolean(fieldErrors.dateFrom)} />
+            {fieldErrors.dateFrom && <span className="field-error">{fieldErrors.dateFrom}</span>}
+          </div>
+          <div className="field">
+            <label htmlFor="rest-date-to-parameter">Optional end-date parameter</label>
+            <input id="rest-date-to-parameter" value={dateToParameter} onChange={event => changeConfiguration(setDateToParameter, event.target.value)} placeholder="to" aria-invalid={Boolean(fieldErrors.dateTo)} />
+            <input aria-label="End-date value" value={dateTo} onChange={event => changeConfiguration(setDateTo, event.target.value)} placeholder="API-specific value" aria-invalid={Boolean(fieldErrors.dateTo)} />
+            {fieldErrors.dateTo && <span className="field-error">{fieldErrors.dateTo}</span>}
+            <span className="field-hint">Values are sent as entered; Kudu does not guess a timezone or convert them.</span>
+          </div>
+        </>}
         <div className="field"><span className="field-label">Response format</span><span className="field-hint">JSON only</span></div>
       </div>}
       {(type === "json_file" || type === "csv_file") && <div className="field"><label htmlFor="source-relative-path">Relative file path *</label><input id="source-relative-path" data-testid="input-source-relative-path" value={relativePath} onChange={event => changeConfiguration(setRelativePath, event.target.value)} placeholder={type === "csv_file" ? "data/measurements.csv" : "data/faults.json"} aria-invalid={Boolean(fieldErrors.relativePath)} aria-describedby={fieldErrors.relativePath ? "source-relative-path-error" : undefined} />{fieldErrors.relativePath && <span className="field-error" id="source-relative-path-error" data-testid="error-source-relative-path">{fieldErrors.relativePath}</span>}<span className="field-hint">Relative to the configured local data root. Saving does not read the file; discovery and import are explicit actions.</span>

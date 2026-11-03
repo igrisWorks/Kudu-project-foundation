@@ -176,10 +176,11 @@ secure-cookie requirements and their separate Compose migration ordering.
 Local Desktop's production-runtime exception is accepted only in Electron and
 still requires Local mode and loopback. Docker Local does not use that exception.
 
-REST remains the existing bounded GET/JSON connector with explicit mapping,
-endpoint/authentication configuration and SSRF safeguards. This change does not
-add arbitrary API protocols, pagination or unattended scheduling. Existing source
-health/status metadata behavior is not expanded; collected event data persists.
+REST remains a bounded GET/JSON connector with explicit mapping,
+endpoint/authentication configuration and SSRF safeguards. Optional
+offset/page/cursor pagination and date filters run only after an operator starts
+or resumes a sync. SQLite stores page checkpoints, run history and event lineage;
+it does not schedule or poll remote sources.
 
 ## Verification
 

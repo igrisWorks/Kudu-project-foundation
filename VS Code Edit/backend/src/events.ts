@@ -181,7 +181,6 @@ function fingerprint(input: ReturnType<typeof validateEventIngest>): string {
     occurredAt: input.occurredAt,
     sourceTimestamp: input.sourceTimestamp,
     payload: input.payload,
-    provenance: input.provenance,
   };
   return createHash("sha256").update(canonicalJson(stableRecord)).digest("hex");
 }
