@@ -92,6 +92,23 @@ export type ConnectorStatus = "not_implemented" | "connected" | "error" | "unsup
 export type DataSourceEnabledFilter = "all" | "enabled" | "disabled";
 export type RestApiAuthMode = "none" | "bearer";
 
+export interface RestPaginationConfiguration {
+  strategy: "offset" | "page" | "cursor";
+  pageSize: number;
+  limitParameter: string;
+  requestIntervalMs?: number;
+  startOffset?: number;
+  startPage?: number;
+  offsetParameter?: string;
+  pageParameter?: string;
+  cursorParameter?: string;
+  nextCursorPath?: string;
+  dateFromParameter?: string;
+  dateFrom?: string;
+  dateToParameter?: string;
+  dateTo?: string;
+}
+
 export type DataSourceConfigurationInput =
   | {
       kind: "rest_api";
@@ -105,6 +122,7 @@ export type DataSourceConfigurationInput =
       maxRecords?: number;
       responseFormat?: "json";
       recordsPath?: string;
+      pagination?: RestPaginationConfiguration;
     }
   | { kind: "json_file"; relativePath: string; recordsPath?: string }
   | { kind: "csv_file"; relativePath: string }
@@ -123,6 +141,7 @@ export type DataSourceConfigurationMetadata =
       maxRecords?: number;
       responseFormat?: "json";
       recordsPath?: string;
+      pagination?: RestPaginationConfiguration;
     }
   | { kind: "json_file"; relativePath: string; recordsPath?: string }
   | { kind: "csv_file"; relativePath: string }
@@ -331,15 +350,29 @@ export interface RestSyncRecordError {
   fields?: Record<string, string>;
 }
 
+export type RestSyncRunStatus = "running" | "completed" | "paused" | "failed";
+
 export interface RestSyncResult {
+  runId: string;
   sourceId: string;
+  mappingVersion: number;
+  status: RestSyncRunStatus;
   requestSucceeded: boolean;
+  pagesCompleted: number;
   fetched: number;
   imported: number;
   duplicates: number;
   failed: number;
   errors: RestSyncRecordError[];
   errorsTruncated: boolean;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  resumable: boolean;
+}
+
+export interface RestSyncRunsResponse {
+  items: RestSyncResult[];
 }
 
 export interface EventListFilters {

@@ -1,10 +1,17 @@
 import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { LookupAddress } from "node:dns";
 import { lookup } from "node:dns/promises";
 import * as http from "node:http";
 import * as https from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
-import type { JsonObject, RestSyncRecordError, RestSyncResult } from "@kudu/shared";
+import type {
+  JsonObject,
+  RestPaginationConfiguration,
+  RestSyncRecordError,
+  RestSyncResult,
+  RestSyncRunStatus,
+} from "@kudu/shared";
 import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database, StoredSourceConfiguration } from "./database.js";
@@ -17,9 +24,11 @@ const DEFAULT_RESPONSE_BYTES = 1_048_576;
 const DEFAULT_RECORDS = 500;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
-const MAX_RECORDS = 1_000;
+const MAX_RECORDS = 100_000;
 const MAX_ERRORS = 100;
 const MAX_REDIRECTS = 3;
+const MAX_PAGES_PER_ACTION = 3;
+const MAX_RETRIES = 3;
 const SOURCE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CREDENTIAL_REF_PATTERN = /^env:KUDU_SOURCE_[A-Z0-9_]{1,80}$/;
@@ -44,10 +53,20 @@ class RestRequestError extends Error {
     readonly code: string,
     message: string,
     readonly statusCode = 502,
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "RestRequestError";
   }
+}
+
+function readRetryAfter(headers: http.IncomingHttpHeaders): number | undefined {
+  const value = headers["retry-after"];
+  if (typeof value !== "string") return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 10_000);
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, Math.min(date - Date.now(), 10_000));
 }
 
 function makeBlockList(entries: Array<[string, number, "ipv4" | "ipv6"]>): BlockList {
@@ -302,11 +321,44 @@ async function requestJson(
       continue;
     }
     if (status < 200 || status >= 300) {
-      throw new RestRequestError("REST_HTTP_ERROR", `The remote API returned HTTP ${status}.`);
+      throw new RestRequestError(
+        "REST_HTTP_ERROR",
+        `The remote API returned HTTP ${status}.`,
+        status,
+        readRetryAfter(response.headers),
+      );
     }
     return response.body;
   }
   throw new RestRequestError("REST_REDIRECT_REJECTED", "The remote redirect could not be followed.");
+}
+
+async function requestJsonWithRetry(
+  initialUrl: URL,
+  authorization: string | undefined,
+  timeoutMs: number,
+  maxResponseBytes: number,
+  policy: NetworkPolicy,
+): Promise<Buffer> {
+  const deadline = Date.now() + timeoutMs;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new RestRequestError("REST_TIMEOUT", "The remote request timed out.", 504);
+    try {
+      return await requestJson(initialUrl, authorization, remaining, maxResponseBytes, policy);
+    } catch (cause) {
+      if (!(cause instanceof RestRequestError)) throw cause;
+      const retryable =
+        cause.code === "REST_TIMEOUT" ||
+        cause.code === "REST_REQUEST_FAILED" ||
+        (cause.code === "REST_HTTP_ERROR" && (cause.statusCode === 429 || cause.statusCode >= 500));
+      if (!retryable || attempt === MAX_RETRIES) throw cause;
+      const delay = Math.min(cause.retryAfterMs ?? 250 * (2 ** attempt), 5_000);
+      if (Date.now() + delay >= deadline) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new RestRequestError("REST_REQUEST_FAILED", "The remote request failed.");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -363,6 +415,373 @@ function failureResult(sourceId: string, error: RestRequestError): RestSyncResul
 
 function configurationFailure(sourceId: string, code: string, message: string): RestSyncResult {
   return failureResult(sourceId, new RestRequestError(code, message, 400));
+}
+
+interface SyncCheckpoint extends JsonObject {
+  offset?: number;
+  page?: number;
+  cursor?: string;
+  cursorHashes?: string[];
+}
+
+interface SyncRunRow {
+  id: string;
+  source_id: string;
+  mapping_version: number;
+  status: RestSyncRunStatus;
+  resumable: boolean;
+  request_succeeded: boolean;
+  config_fingerprint: string;
+  checkpoint: JsonObject;
+  pages_completed: number;
+  fetched: number;
+  imported: number;
+  duplicates: number;
+  failed: number;
+  errors: RestSyncRecordError[];
+  errors_truncated: boolean;
+  last_error_code: string | null;
+  started_at: Date | string;
+  updated_at: Date | string;
+  completed_at: Date | string | null;
+}
+
+function runResult(row: SyncRunRow): RestSyncResult {
+  const timestamp = (value: Date | string) => value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+  return {
+    runId: row.id,
+    sourceId: row.source_id,
+    mappingVersion: row.mapping_version,
+    status: row.status,
+    requestSucceeded: row.request_succeeded,
+    pagesCompleted: row.pages_completed,
+    fetched: row.fetched,
+    imported: row.imported,
+    duplicates: row.duplicates,
+    failed: row.failed,
+    errors: row.errors,
+    errorsTruncated: row.errors_truncated,
+    startedAt: timestamp(row.started_at),
+    updatedAt: timestamp(row.updated_at),
+    completedAt: row.completed_at ? timestamp(row.completed_at) : null,
+    resumable: row.resumable,
+  };
+}
+
+function syncConfigFingerprint(configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }>): string {
+  return createHash("sha256").update(canonicalJson({
+    baseUrl: configuration.baseUrl,
+    endpointPath: configuration.endpointPath ?? "",
+    method: configuration.method ?? "GET",
+    authMode: configuration.authMode ?? "none",
+    credentialRef: configuration.credentialRef ?? "",
+    recordsPath: configuration.recordsPath ?? "",
+    pagination: configuration.pagination ?? null,
+  })).digest("hex");
+}
+
+function initialCheckpoint(pagination: RestPaginationConfiguration | undefined): SyncCheckpoint {
+  if (pagination?.strategy === "offset") return { offset: pagination.startOffset ?? 0 };
+  if (pagination?.strategy === "page") return { page: pagination.startPage ?? 1 };
+  return {};
+}
+
+function checkpointFrom(value: unknown): SyncCheckpoint {
+  if (typeof value === "string") {
+    try { return checkpointFrom(JSON.parse(value) as unknown); } catch { return {}; }
+  }
+  return isRecord(value) ? value as SyncCheckpoint : {};
+}
+
+function pageUrl(
+  endpoint: URL,
+  pagination: RestPaginationConfiguration | undefined,
+  checkpoint: SyncCheckpoint,
+  remaining: number,
+): { url: URL; requestedLimit: number } {
+  const url = new URL(endpoint);
+  if (!pagination) return { url, requestedLimit: remaining };
+  const requestedLimit = Math.min(pagination.pageSize, remaining);
+  url.searchParams.set(pagination.limitParameter, String(requestedLimit));
+  if (pagination.strategy === "offset") {
+    url.searchParams.set(pagination.offsetParameter!, String(checkpoint.offset ?? pagination.startOffset ?? 0));
+  } else if (pagination.strategy === "page") {
+    url.searchParams.set(pagination.pageParameter!, String(checkpoint.page ?? pagination.startPage ?? 1));
+  } else if (checkpoint.cursor) {
+    url.searchParams.set(pagination.cursorParameter!, checkpoint.cursor);
+  }
+  if (pagination.dateFromParameter && pagination.dateFrom) {
+    url.searchParams.set(pagination.dateFromParameter, pagination.dateFrom);
+  }
+  if (pagination.dateToParameter && pagination.dateTo) {
+    url.searchParams.set(pagination.dateToParameter, pagination.dateTo);
+  }
+  return { url, requestedLimit };
+}
+
+function recordsFromResponse(
+  value: unknown,
+  configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }>,
+): unknown[] {
+  const records = configuration.recordsPath
+    ? isRecord(value) ? readMappedField(value as JsonObject, configuration.recordsPath) : undefined
+    : value;
+  if (!Array.isArray(records)) {
+    throw new RestRequestError("REST_RECORDS_PATH_INVALID", "The configured JSON path did not contain an array of records.", 400);
+  }
+  return records;
+}
+
+function nextCursorFromResponse(
+  value: unknown,
+  pagination: RestPaginationConfiguration,
+): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const cursor = readMappedField(value as JsonObject, pagination.nextCursorPath!);
+  if (cursor === undefined || cursor === null || cursor === "") return undefined;
+  if (typeof cursor === "string" || (typeof cursor === "number" && Number.isFinite(cursor))) return String(cursor);
+  throw new RestRequestError("REST_CURSOR_INVALID", "The configured next-cursor path did not contain a string or number.", 400);
+}
+
+async function getSyncRun(db: Kysely<Database>, runId: string): Promise<SyncRunRow | undefined> {
+  return await db.selectFrom("data_source_sync_runs").selectAll().where("id", "=", runId).executeTakeFirst() as SyncRunRow | undefined;
+}
+
+async function persistRun(
+  db: Kysely<Database>,
+  runId: string,
+  values: {
+    status: RestSyncRunStatus;
+    resumable: boolean;
+    requestSucceeded: boolean;
+    checkpoint: SyncCheckpoint;
+    pagesCompleted: number;
+    fetched: number;
+    imported: number;
+    duplicates: number;
+    failed: number;
+    errors: RestSyncRecordError[];
+    errorsTruncated: boolean;
+    lastErrorCode: string | null;
+    completed: boolean;
+  },
+): Promise<SyncRunRow> {
+  const now = new Date().toISOString();
+  await db.updateTable("data_source_sync_runs").set({
+    status: values.status,
+    resumable: values.resumable,
+    request_succeeded: values.requestSucceeded,
+    checkpoint: JSON.stringify(values.checkpoint),
+    pages_completed: values.pagesCompleted,
+    fetched: values.fetched,
+    imported: values.imported,
+    duplicates: values.duplicates,
+    failed: values.failed,
+    errors: JSON.stringify(values.errors),
+    errors_truncated: values.errorsTruncated,
+    last_error_code: values.lastErrorCode,
+    updated_at: now,
+    completed_at: values.completed ? now : null,
+  }).where("id", "=", runId).execute();
+  const row = await getSyncRun(db, runId);
+  if (!row) throw new Error("The sync run disappeared while it was being updated.");
+  return row;
+}
+
+function appendRunError(
+  errors: RestSyncRecordError[],
+  errorsTruncated: boolean,
+  error: RestSyncRecordError,
+): { errors: RestSyncRecordError[]; errorsTruncated: boolean } {
+  if (errors.length >= MAX_ERRORS) return { errors, errorsTruncated: true };
+  return { errors: [...errors, error], errorsTruncated };
+}
+
+async function executeSyncRun(
+  db: Kysely<Database>,
+  source: { id: string; sourceKey: string; configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }> },
+  mapping: Awaited<ReturnType<typeof getActiveEventMapping>> & {},
+  initialRun: SyncRunRow,
+  endpoint: URL,
+  authorization: string | undefined,
+  timeoutMs: number,
+  maxResponseBytes: number,
+  maxRecords: number,
+  policy: NetworkPolicy,
+): Promise<RestSyncResult> {
+  let run = initialRun;
+  let checkpoint = checkpointFrom(run.checkpoint);
+  let requestSucceeded = run.request_succeeded;
+  let pagesCompleted = run.pages_completed;
+  let fetched = run.fetched;
+  let imported = run.imported;
+  let duplicates = run.duplicates;
+  let failed = run.failed;
+  let errors = run.errors;
+  let errorsTruncated = run.errors_truncated;
+  let lastErrorCode = run.last_error_code;
+  let actionPages = 0;
+  const pagination = source.configuration.pagination;
+  let done = false;
+  let lastRequestAt = 0;
+
+  try {
+    while (!done && actionPages < MAX_PAGES_PER_ACTION && pagesCompleted < MAX_RECORDS + 1) {
+      const remaining = maxRecords - fetched;
+      if (remaining <= 0) break;
+      const request = pageUrl(endpoint, pagination, checkpoint, remaining);
+      if (actionPages > 0 && pagination?.requestIntervalMs) {
+        const waitMs = pagination.requestIntervalMs - (Date.now() - lastRequestAt);
+        if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+      let bytes: Buffer;
+      try {
+        bytes = await requestJsonWithRetry(request.url, authorization, timeoutMs, maxResponseBytes, policy);
+        requestSucceeded = true;
+      } finally {
+        lastRequestAt = Date.now();
+      }
+      let responseJson: unknown;
+      try { responseJson = JSON.parse(bytes.toString("utf8")) as unknown; }
+      catch { throw new RestRequestError("REST_INVALID_JSON", "The remote response was not valid JSON."); }
+      const records = recordsFromResponse(responseJson, source.configuration);
+      if (pagination && records.length > request.requestedLimit) {
+        throw new RestRequestError("REST_PAGE_LIMIT_IGNORED", "The remote API returned more records than the configured page size.", 400);
+      }
+      if (!pagination && records.length > maxRecords) {
+        throw new RestRequestError("REST_RECORD_LIMIT_EXCEEDED", `The response exceeded the configured maximum of ${maxRecords} records.`, 400);
+      }
+
+      const pageFetched = records.length;
+      let pageImported = 0;
+      let pageDuplicates = 0;
+      let pageFailed = 0;
+      for (let index = 0; index < records.length; index += 1) {
+        const value = records[index];
+        const recordNumber = fetched + index + 1;
+        try {
+          if (!isRecord(value)) throw new ApiFailure(400, "INVALID_REMOTE_RECORD", "The remote item must be a JSON object.");
+          const rawRecord = value as JsonObject;
+          const normalized = await normalizeMappedEvent(
+            db,
+            source.id,
+            rawRecord,
+            basePayload(rawRecord),
+            mapping,
+            fallbackKey(source.id, rawRecord),
+            { connector: "rest_api", responseFormat: "json", syncRunId: run.id, mappingVersion: mapping.version },
+          );
+          const ingestion = await ingestEvent(db, normalized);
+          if (ingestion.duplicate) pageDuplicates += 1;
+          else pageImported += 1;
+        } catch (cause) {
+          if (!(cause instanceof ApiFailure) || cause.statusCode >= 500) throw cause;
+          pageFailed += 1;
+          const appended = appendRunError(errors, errorsTruncated, recordError(recordNumber, cause));
+          errors = appended.errors;
+          errorsTruncated = appended.errorsTruncated || pageFailed + failed > errors.length;
+        }
+      }
+      fetched += pageFetched;
+      imported += pageImported;
+      duplicates += pageDuplicates;
+      failed += pageFailed;
+      pagesCompleted += 1;
+      actionPages += 1;
+
+      let nextCheckpoint = checkpoint;
+      if (!pagination) done = true;
+      else if (pagination.strategy === "cursor") {
+        const nextCursor = nextCursorFromResponse(responseJson, pagination);
+        if (!nextCursor) done = true;
+        else {
+          const hashes = checkpoint.cursorHashes ?? [];
+          const hash = createHash("sha256").update(nextCursor).digest("hex");
+          if (hashes.includes(hash)) throw new RestRequestError("REST_CURSOR_REPEATED", "The remote API repeated a cursor; sync stopped to prevent an infinite loop.", 400);
+          nextCheckpoint = { ...checkpoint, cursor: nextCursor, cursorHashes: [...hashes, hash].slice(-10_000) };
+        }
+      } else {
+        done = records.length < request.requestedLimit;
+        nextCheckpoint = pagination.strategy === "offset"
+          ? { ...checkpoint, offset: (checkpoint.offset ?? pagination.startOffset ?? 0) + records.length }
+          : { ...checkpoint, page: (checkpoint.page ?? pagination.startPage ?? 1) + 1 };
+      }
+      checkpoint = nextCheckpoint;
+      lastErrorCode = pageFailed ? "RECORDS_REJECTED" : null;
+      run = await persistRun(db, run.id, {
+        status: "running",
+        resumable: false,
+        requestSucceeded,
+        checkpoint,
+        pagesCompleted,
+        fetched,
+        imported,
+        duplicates,
+        failed,
+        errors,
+        errorsTruncated,
+        lastErrorCode,
+        completed: false,
+      });
+      if (done) break;
+    }
+
+    const status: RestSyncRunStatus = done ? "completed" : "paused";
+    run = await persistRun(db, run.id, {
+      status,
+      resumable: status === "paused",
+      requestSucceeded,
+      checkpoint,
+      pagesCompleted,
+      fetched,
+      imported,
+      duplicates,
+      failed,
+      errors,
+      errorsTruncated,
+      lastErrorCode,
+      completed: done,
+    });
+    if (requestSucceeded && done) {
+      await db.updateTable("data_sources").set({
+        last_successful_sync_at: new Date().toISOString(),
+        last_error_summary: failed ? `${failed} record${failed === 1 ? "" : "s"} failed during the latest sync.` : null,
+      }).where("id", "=", source.id).execute();
+    }
+    return runResult(run);
+  } catch (cause) {
+    const safeError = cause instanceof RestRequestError
+      ? { record: 0, code: cause.code, message: cause.message }
+      : cause instanceof ApiFailure && cause.statusCode < 500
+        ? recordError(0, cause)
+        : { record: 0, code: "REST_SYNC_FAILED", message: "The sync stopped because the application could not safely process a response." };
+    const appended = appendRunError(errors, errorsTruncated, safeError);
+    errors = appended.errors;
+    errorsTruncated = appended.errorsTruncated;
+    lastErrorCode = safeError.code;
+    run = await persistRun(db, run.id, {
+      status: "failed",
+      resumable: cause instanceof RestRequestError && (
+        cause.code === "REST_TIMEOUT" || cause.code === "REST_REQUEST_FAILED" ||
+        (cause.code === "REST_HTTP_ERROR" && (cause.statusCode === 429 || cause.statusCode >= 500))
+      ),
+      requestSucceeded,
+      checkpoint,
+      pagesCompleted,
+      fetched,
+      imported,
+      duplicates,
+      failed,
+      errors,
+      errorsTruncated,
+      lastErrorCode,
+      completed: true,
+    });
+    await db.updateTable("data_sources").set({
+      last_error_summary: safeError.message.slice(0, 1000),
+    }).where("id", "=", source.id).execute();
+    return runResult(run);
+  }
 }
 
 function recordError(record: number, cause: unknown): RestSyncRecordError {
@@ -451,8 +870,14 @@ export async function fetchRestDiscoveryDocument(
   }
   let bytes: Buffer;
   try {
-    bytes = await requestJson(
+    const discoveryRequest = pageUrl(
       url,
+      configuration.pagination,
+      initialCheckpoint(configuration.pagination),
+      configuration.pagination?.pageSize ?? limits.maxRecords,
+    );
+    bytes = await requestJsonWithRetry(
+      discoveryRequest.url,
       token ? `Bearer ${token}` : undefined,
       limits.timeoutMs,
       limits.maxResponseBytes,
@@ -523,13 +948,13 @@ export function registerRestSyncRoutes(
 
       let responseBytes: Buffer;
       try {
-        responseBytes = await requestJson(
-          url,
-          token ? `Bearer ${token}` : undefined,
-          limits.timeoutMs,
-          limits.maxResponseBytes,
-          policy,
-        );
+      responseBytes = await requestJsonWithRetry(
+        url,
+        token ? `Bearer ${token}` : undefined,
+        limits.timeoutMs,
+        limits.maxResponseBytes,
+        policy,
+      );
       } catch (cause) {
         const safeError = cause instanceof RestRequestError
           ? cause

@@ -8,6 +8,9 @@ import type {
   EventMappingValidationError,
   ExternalIdentifier,
   JsonObject,
+  RestSyncRecordError,
+  RestPaginationConfiguration,
+  RestSyncRunStatus,
 } from "@kudu/shared";
 
 type TimestampColumn = ColumnType<Date, Date | string | undefined, Date | string | undefined>;
@@ -25,6 +28,7 @@ export type StoredSourceConfiguration =
       maxRecords?: number;
       responseFormat?: "json";
       recordsPath?: string;
+      pagination?: RestPaginationConfiguration;
     }
   | { kind: "json_file"; relativePath: string; recordsPath?: string }
   | { kind: "csv_file"; relativePath: string }
@@ -87,11 +91,34 @@ interface DataSourceEventMappingsTable {
   updated_at: Generated<Date>;
 }
 
+interface DataSourceSyncRunsTable {
+  id: Generated<string>;
+  source_id: string;
+  mapping_version: number;
+  status: RestSyncRunStatus;
+  resumable: boolean;
+  request_succeeded: boolean;
+  config_fingerprint: string;
+  checkpoint: ColumnType<JsonObject, string, string>;
+  pages_completed: number;
+  fetched: number;
+  imported: number;
+  duplicates: number;
+  failed: number;
+  errors: ColumnType<RestSyncRecordError[], string, string>;
+  errors_truncated: boolean;
+  last_error_code: string | null;
+  started_at: TimestampColumn;
+  updated_at: TimestampColumn;
+  completed_at: TimestampColumn | null;
+}
+
 export interface Database {
   assets: AssetsTable;
   data_sources: DataSourcesTable;
   events: EventsTable;
   data_source_event_mappings: DataSourceEventMappingsTable;
+  data_source_sync_runs: DataSourceSyncRunsTable;
 }
 
 export function createDatabase(connectionString: string): {

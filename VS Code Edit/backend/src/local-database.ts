@@ -37,6 +37,14 @@ const dataTables = [
       "validated_at", "activated_at", "created_at", "updated_at",
     ],
   },
+  {
+    name: "data_source_sync_runs",
+    columns: [
+      "id", "source_id", "mapping_version", "status", "resumable", "request_succeeded", "config_fingerprint",
+      "checkpoint", "pages_completed", "fetched", "imported", "duplicates", "failed", "errors",
+      "errors_truncated", "last_error_code", "started_at", "updated_at", "completed_at",
+    ],
+  },
 ] as const;
 
 export interface LocalDatabaseBackup {

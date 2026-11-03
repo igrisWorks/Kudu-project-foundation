@@ -9,6 +9,7 @@ import {
   type DataSourceType,
   type DataSourceUpdateInput,
   type ExternalIdentifier,
+  type RestPaginationConfiguration,
 } from "@kudu/shared";
 import { ApiFailure } from "./errors.js";
 
@@ -294,10 +295,10 @@ function parseEndpointPath(value: unknown, errors: Errors): string | undefined {
   return normalized.replace(/^\/+/, "");
 }
 
-function parseRecordsPath(value: unknown, errors: Errors): string | undefined {
+function parseDotPath(value: unknown, field: string, errors: Errors): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.length > 256) {
-    errors["configuration.recordsPath"] = "Use an optional dot-separated path of at most 256 characters.";
+    errors[field] = "Use an optional dot-separated path of at most 256 characters.";
     return undefined;
   }
   const normalized = value.trim();
@@ -308,10 +309,102 @@ function parseRecordsPath(value: unknown, errors: Errors): string | undefined {
     parts.some((part) => !part || part.length > 128 || part.trim() !== part ||
       ["__proto__", "constructor", "prototype"].includes(part))
   ) {
-    errors["configuration.recordsPath"] = "Use a safe dot-separated JSON object path, with at most eight parts.";
+    errors[field] = "Use a safe dot-separated JSON object path, with at most eight parts.";
     return undefined;
   }
   return normalized;
+}
+
+function parseRecordsPath(value: unknown, errors: Errors): string | undefined {
+  return parseDotPath(value, "configuration.recordsPath", errors);
+}
+
+function parseQueryParameter(value: unknown, field: string, errors: Errors): string | undefined {
+  if (typeof value !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value.trim())) {
+    errors[field] = "Use a parameter name of up to 64 letters, numbers, dots, dashes, or underscores.";
+    return undefined;
+  }
+  return value.trim();
+}
+
+function parsePagination(value: unknown, errors: Errors): RestPaginationConfiguration | undefined {
+  if (value === undefined) return undefined;
+  if (!isInput(value)) {
+    errors["configuration.pagination"] = "Pagination must be a configuration object.";
+    return undefined;
+  }
+  const prefix = "configuration.pagination";
+  unknownFields(value, [
+    "strategy", "pageSize", "limitParameter", "startOffset", "startPage", "offsetParameter",
+    "pageParameter", "cursorParameter", "nextCursorPath", "requestIntervalMs", "dateFromParameter", "dateFrom",
+    "dateToParameter", "dateTo",
+  ], errors);
+  if (value.strategy !== "offset" && value.strategy !== "page" && value.strategy !== "cursor") {
+    errors[`${prefix}.strategy`] = "Choose offset, page-number, or cursor pagination.";
+    return undefined;
+  }
+  const strategy = value.strategy;
+  const pageSize = optionalInteger(value, "pageSize", 1, 1000, errors);
+  if (pageSize === undefined) errors[`${prefix}.pageSize`] = "Set a page size from 1 to 1000.";
+  const limitParameter = parseQueryParameter(value.limitParameter, `${prefix}.limitParameter`, errors);
+  const requestIntervalMs = optionalInteger(value, "requestIntervalMs", 0, 10_000, errors);
+  const startOffset = optionalInteger(value, "startOffset", 0, 1_000_000_000, errors);
+  const startPage = optionalInteger(value, "startPage", 0, 1_000_000_000, errors);
+  const offsetParameter = strategy === "offset"
+    ? parseQueryParameter(value.offsetParameter, `${prefix}.offsetParameter`, errors)
+    : undefined;
+  const pageParameter = strategy === "page"
+    ? parseQueryParameter(value.pageParameter, `${prefix}.pageParameter`, errors)
+    : undefined;
+  const cursorParameter = strategy === "cursor"
+    ? parseQueryParameter(value.cursorParameter, `${prefix}.cursorParameter`, errors)
+    : undefined;
+  const nextCursorPath = strategy === "cursor"
+    ? parseDotPath(value.nextCursorPath, `${prefix}.nextCursorPath`, errors)
+    : undefined;
+  if (strategy === "cursor" && !nextCursorPath) {
+    errors[`${prefix}.nextCursorPath`] ??= "Configure the response path that contains the next cursor.";
+  }
+  const dateFromParameter = value.dateFromParameter === undefined
+    ? undefined
+    : parseQueryParameter(value.dateFromParameter, `${prefix}.dateFromParameter`, errors);
+  const dateFrom = value.dateFrom === undefined ? undefined : requiredText(value, "dateFrom", 128, errors);
+  const dateToParameter = value.dateToParameter === undefined
+    ? undefined
+    : parseQueryParameter(value.dateToParameter, `${prefix}.dateToParameter`, errors);
+  const dateTo = value.dateTo === undefined ? undefined : requiredText(value, "dateTo", 128, errors);
+  if ((dateFromParameter && !dateFrom) || (dateFrom && !dateFromParameter)) {
+    errors[`${prefix}.dateFrom`] = "Set both the start-date query parameter and its value.";
+  }
+  if ((dateToParameter && !dateTo) || (dateTo && !dateToParameter)) {
+    errors[`${prefix}.dateTo`] = "Set both the end-date query parameter and its value.";
+  }
+  const params = [limitParameter, offsetParameter, pageParameter, cursorParameter, dateFromParameter, dateToParameter]
+    .filter((item): item is string => Boolean(item));
+  if (new Set(params).size !== params.length) errors[`${prefix}.limitParameter`] = "Pagination and date parameters must be distinct.";
+  if (startOffset !== undefined && strategy !== "offset") errors[`${prefix}.startOffset`] = "Start offset applies only to offset pagination.";
+  if (startPage !== undefined && strategy !== "page") errors[`${prefix}.startPage`] = "Start page applies only to page-number pagination.";
+  if (
+    pageSize === undefined || limitParameter === undefined ||
+    (strategy === "offset" && offsetParameter === undefined) ||
+    (strategy === "page" && pageParameter === undefined) ||
+    (strategy === "cursor" && (cursorParameter === undefined || nextCursorPath === undefined || nextCursorPath === "")) ||
+    Object.keys(errors).some((key) => key.startsWith(`${prefix}.`))
+  ) return undefined;
+  return {
+    strategy,
+    pageSize,
+    limitParameter,
+    ...(requestIntervalMs !== undefined ? { requestIntervalMs } : {}),
+    ...(startOffset !== undefined ? { startOffset } : {}),
+    ...(startPage !== undefined ? { startPage } : {}),
+    ...(offsetParameter ? { offsetParameter } : {}),
+    ...(pageParameter ? { pageParameter } : {}),
+    ...(cursorParameter ? { cursorParameter } : {}),
+    ...(nextCursorPath ? { nextCursorPath } : {}),
+    ...(dateFromParameter && dateFrom ? { dateFromParameter, dateFrom } : {}),
+    ...(dateToParameter && dateTo ? { dateToParameter, dateTo } : {}),
+  };
 }
 
 function parseConfiguration(
@@ -334,7 +427,7 @@ function parseConfiguration(
       value,
       [
         "kind", "baseUrl", "endpointPath", "method", "authMode", "credentialRef",
-        "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath",
+        "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath", "pagination",
       ],
       errors,
     );
@@ -404,8 +497,9 @@ function parseConfiguration(
     }
     const timeoutMs = optionalInteger(value, "timeoutMs", 500, 30_000, errors);
     const maxResponseBytes = optionalInteger(value, "maxResponseBytes", 1024, 5 * 1024 * 1024, errors);
-    const maxRecords = optionalInteger(value, "maxRecords", 1, 1000, errors);
+    const maxRecords = optionalInteger(value, "maxRecords", 1, 100_000, errors);
     const recordsPath = parseRecordsPath(value.recordsPath, errors);
+    const pagination = parsePagination(value.pagination, errors);
 
     return {
       kind: "rest_api",
@@ -419,6 +513,7 @@ function parseConfiguration(
       ...(maxRecords !== undefined ? { maxRecords } : {}),
       ...(responseFormat !== undefined ? { responseFormat } : {}),
       ...(recordsPath !== undefined ? { recordsPath } : {}),
+      ...(pagination !== undefined ? { pagination } : {}),
     };
   }
 

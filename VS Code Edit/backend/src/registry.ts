@@ -195,6 +195,7 @@ function sourceConfigurationMetadata(
         ...(configuration.maxRecords !== undefined ? { maxRecords: configuration.maxRecords } : {}),
         ...(configuration.responseFormat !== undefined ? { responseFormat: configuration.responseFormat } : {}),
         ...(configuration.recordsPath !== undefined ? { recordsPath: configuration.recordsPath } : {}),
+        ...(configuration.pagination !== undefined ? { pagination: configuration.pagination } : {}),
       };
     case "json_file":
       return {
