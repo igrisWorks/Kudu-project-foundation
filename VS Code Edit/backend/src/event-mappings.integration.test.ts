@@ -110,6 +110,80 @@ async function createValidateActivate(
 }
 
 test(
+  "PostgreSQL discovery previews registered asset matches and reuses an active mapping across file formats",
+  { skip: !databaseUrl },
+  async (context) => {
+    const { app, importDirectory, addAsset, addSource } = await createFixture(context);
+    const jsonSourceId = await addSource("plant/discovery.json", "json_file");
+    const csvSourceId = await addSource("plant/reused.csv", "csv_file");
+    const asset = await addAsset();
+    const originalRecord = {
+      kind: "pressure.alarm",
+      time: "2026-11-02T10:00:00Z",
+      sourceRecordId: "pg-discovery-json-1",
+      assetKey: asset.key,
+      pressure: 31,
+    };
+    await writeFile(join(importDirectory, "plant/discovery.json"), JSON.stringify([originalRecord]), "utf8");
+
+    const source = (await app.inject({
+      method: "GET",
+      url: `/api/v1/data-sources/${jsonSourceId}`,
+    })).json();
+    const discovery = await app.inject({
+      method: "POST",
+      url: "/api/v1/data-sources/discover",
+      payload: {
+        sourceType: "json_file",
+        sourceKey: source.sourceKey,
+        configuration: { kind: "json_file", relativePath: "plant/discovery.json" },
+      },
+    });
+    assert.equal(discovery.statusCode, 200, discovery.body);
+    assert.equal(discovery.json().preview[0].assetMatch.matchType, "asset_key");
+
+    const definition = {
+      eventType: "kind",
+      occurredAt: "time",
+      sourceRecordId: "sourceRecordId",
+      assetKey: "assetKey",
+      payload: { pressure: "pressure" },
+    };
+    await createValidateActivate(app, jsonSourceId, definition, 1);
+    const mappingHistory = await app.inject({
+      method: "GET",
+      url: `/api/v1/data-sources/${jsonSourceId}/mappings`,
+    });
+    assert.equal(mappingHistory.statusCode, 200, mappingHistory.body);
+    const reusableDefinition = mappingHistory.json().items.find(
+      (mapping: { status: string }) => mapping.status === "active",
+    ).definition;
+
+    await writeFile(
+      join(importDirectory, "plant/reused.csv"),
+      `kind,time,sourceRecordId,assetKey,pressure\\npressure.alarm,2026-11-02T10:01:00Z,pg-reused-csv-1,${asset.key},32\\n`,
+      "utf8",
+    );
+    await createValidateActivate(app, csvSourceId, reusableDefinition, 1);
+    const imported = await app.inject({
+      method: "POST",
+      url: `/api/v1/data-sources/${csvSourceId}/import`,
+    });
+    assert.equal(imported.statusCode, 200, imported.body);
+    assert.equal(imported.json().imported, 1);
+    assert.equal(imported.json().failed, 0);
+    const eventList = await app.inject({ method: "GET", url: `/api/v1/events?sourceId=${csvSourceId}` });
+    const event = eventList.json().items[0] as { id: string; sourceRecordId: string };
+    const detail = (await app.inject({ method: "GET", url: `/api/v1/events/${event.id}` })).json();
+    assert.equal(event.sourceRecordId, "pg-reused-csv-1");
+    assert.equal(detail.eventType, "pressure.alarm");
+    assert.equal(detail.asset.id, asset.id);
+    assert.equal(detail.payload.pressure, "32");
+    assert.equal(detail.provenance.mappingVersion, 1);
+  },
+);
+
+test(
   "CSV mapping accepts renamed headers and resolves only the explicit asset key",
   { skip: !databaseUrl },
   async (context) => {

@@ -215,17 +215,25 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
     assert.equal(changedDuplicate.duplicates, 4);
     assert.equal(changedDuplicate.failed, 1);
     assert.equal((await call("GET", `/api/v1/events/${pagedFirstEvent.id}`)).payload.reading, 1);
+    const pageApiConfiguration = {
+      kind: "rest_api" as const, baseUrl: `http://127.0.0.1:${address.port}`, endpointPath: "/page-api",
+      recordsPath: "items", maxRecords: 10,
+      pagination: {
+        strategy: "page" as const, pageSize: 1, limitParameter: "limit", pageParameter: "page",
+        startPage: 0, requestIntervalMs: 0, dateFromParameter: "from", dateFrom: "2026-11-01",
+      },
+    };
     const pageApi = await call("POST", "/api/v1/data-sources", {
       sourceKey: "page-api", displayName: "Page-number API", sourceType: "rest_api", enabled: true,
-      configuration: {
-        kind: "rest_api", baseUrl: `http://127.0.0.1:${address.port}`, endpointPath: "/page-api",
-        recordsPath: "items", maxRecords: 10,
-        pagination: {
-          strategy: "page", pageSize: 1, limitParameter: "limit", pageParameter: "page",
-          startPage: 0, requestIntervalMs: 0, dateFromParameter: "from", dateFrom: "2026-11-01",
-        },
-      },
+      configuration: pageApiConfiguration,
     });
+    const pageDiscovery = await call("POST", "/api/v1/data-sources/discover", {
+      sourceType: "rest_api",
+      sourceKey: "page-api",
+      configuration: pageApiConfiguration,
+    }, 200);
+    assert.equal(pageDiscovery.sampledPageCount, 3);
+    assert.equal(pageDiscovery.recordPaths[0]?.recordCount, 2);
     await mapping(pageApi.id);
     const pagedByNumber = await call("POST", `/api/v1/data-sources/${pageApi.id}/sync`, undefined, 200);
     assert.equal(pagedByNumber.status, "completed");
@@ -233,17 +241,25 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
     assert.equal(pagedByNumber.pagesCompleted, 3);
     assert.ok(pageRequests.some(value => new URLSearchParams(value).get("from") === "2026-11-01"));
 
+    const cursorApiConfiguration = {
+      kind: "rest_api" as const, baseUrl: `http://127.0.0.1:${address.port}`, endpointPath: "/cursor-api",
+      recordsPath: "items", maxRecords: 10,
+      pagination: {
+        strategy: "cursor" as const, pageSize: 1, limitParameter: "limit", cursorParameter: "cursor",
+        nextCursorPath: "paging.next", requestIntervalMs: 0,
+      },
+    };
     const cursorApi = await call("POST", "/api/v1/data-sources", {
       sourceKey: "cursor-api", displayName: "Cursor API", sourceType: "rest_api", enabled: true,
-      configuration: {
-        kind: "rest_api", baseUrl: `http://127.0.0.1:${address.port}`, endpointPath: "/cursor-api",
-        recordsPath: "items", maxRecords: 10,
-        pagination: {
-          strategy: "cursor", pageSize: 1, limitParameter: "limit", cursorParameter: "cursor",
-          nextCursorPath: "paging.next", requestIntervalMs: 0,
-        },
-      },
+      configuration: cursorApiConfiguration,
     });
+    const cursorDiscovery = await call("POST", "/api/v1/data-sources/discover", {
+      sourceType: "rest_api",
+      sourceKey: "cursor-api",
+      configuration: cursorApiConfiguration,
+    }, 200);
+    assert.equal(cursorDiscovery.sampledPageCount, 2);
+    assert.equal(cursorDiscovery.recordPaths[0]?.recordCount, 2);
     await mapping(cursorApi.id);
     const cursorSync = await call("POST", `/api/v1/data-sources/${cursorApi.id}/sync`, undefined, 200);
     assert.equal(cursorSync.status, "completed");
