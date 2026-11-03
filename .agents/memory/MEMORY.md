@@ -3,3 +3,4 @@
 - [Desktop dependency isolation](desktop-build-isolation.md) — keep Electron tools outside the root workspace so server Docker installs stay unchanged.
 - [AppImage sandbox defaults](desktop-appimage-sandbox.md) — inspect launch arguments and fail closed if the Chromium sandbox cannot be used.
 - [Edition storage boundary](edition-storage-boundary.md) — Local is embedded SQLite; Server/Enterprise retain PostgreSQL and authentication; legacy data moves only by explicit import.
+- [PostgreSQL test search path](postgresql-test-search-path.md) — direct test connections must match runtime schema lookup or they produce misleading missing-table failures.

@@ -19,10 +19,7 @@ test(
   "migrations apply once and remain repeatable",
   { skip: !databaseUrl },
   async () => {
-    const pool = new Pool({
-      connectionString: databaseUrl,
-      options: "-c search_path=kudu,public",
-    });
+    const pool = new Pool({ connectionString: databaseUrl });
     try {
       await runMigrations(pool, migrationsDirectory);
       assert.deepEqual(await runMigrations(pool, migrationsDirectory), []);
@@ -49,7 +46,10 @@ test(
   { skip: !databaseUrl },
   async (context) => {
     const prefix = `kt${randomUUID().replaceAll("-", "").slice(0, 10)}`;
-    const pool = new Pool({ connectionString: databaseUrl });
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      options: "-c search_path=kudu,public",
+    });
     const db = new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
     const app = await createAuthenticatedTestApp({ db, logLevel: "silent" });
 

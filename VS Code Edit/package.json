@@ -13,6 +13,7 @@
     "build": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/frontend build && pnpm --filter @kudu/backend build",
     "typecheck": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/shared typecheck && pnpm --filter @kudu/backend typecheck && pnpm --filter @kudu/frontend typecheck",
     "test": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/backend test && pnpm test:docker-local",
+    "test:browser-smoke": "pnpm --filter @kudu/shared build && pnpm --filter @kudu/frontend build && pnpm --filter @kudu/backend exec node --import tsx --test src/data-sources.browser.test.ts",
     "test:docker-local": "node --test scripts/docker-local.test.mjs scripts/validate-docker-ca.test.mjs",
     "docker:local": "node scripts/docker-local.mjs",
     "start": "pnpm --filter @kudu/backend start",

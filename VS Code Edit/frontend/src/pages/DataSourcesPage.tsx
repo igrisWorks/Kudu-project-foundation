@@ -228,7 +228,7 @@ function DataSourceDetailPage() {
                 <strong>{item.record === 0 ? "Request" : `Record ${item.record}`} · {item.code}</strong>: {item.message}
               </li>)}</ul>
             </details>}
-            {canResume && <button className="button" type="button" onClick={() => void resumeRestSync(run.runId)} disabled={syncing}>
+            {canResume && <button className="button" type="button" onClick={() => void resumeRestSync(run.runId)} disabled={syncing} data-testid={`button-resume-sync-run-${run.runId}`}>
               {syncing ? "Resuming…" : recoverStale ? "Recover interrupted run" : "Resume run"}
             </button>}
           </li>;
