@@ -19,7 +19,10 @@ test(
   "migrations apply once and remain repeatable",
   { skip: !databaseUrl },
   async () => {
-    const pool = new Pool({ connectionString: databaseUrl });
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      options: "-c search_path=kudu,public",
+    });
     try {
       await runMigrations(pool, migrationsDirectory);
       assert.deepEqual(await runMigrations(pool, migrationsDirectory), []);
