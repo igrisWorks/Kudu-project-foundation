@@ -468,12 +468,24 @@ function DiscoveryReview({
   onSelectPath,
   mappingPaths,
   onChangeMappingPath,
+  mappingTemplateSources,
+  mappingTemplateSourceId,
+  onMappingTemplateSourceChange,
+  onApplyMappingTemplate,
+  mappingTemplateBusy,
+  mappingTemplateMessage,
 }: {
   result: DataSourceDiscoveryResult;
   selectedPath: string;
   onSelectPath: (path: string) => void;
   mappingPaths: Record<string, string>;
   onChangeMappingPath: (target: SuggestedTargetField, path: string) => void;
+  mappingTemplateSources: DataSourceRecord[];
+  mappingTemplateSourceId: string;
+  onMappingTemplateSourceChange: (sourceId: string) => void;
+  onApplyMappingTemplate: () => void;
+  mappingTemplateBusy: boolean;
+  mappingTemplateMessage: string;
 }) {
   const selected = result.recordPaths.find(item => item.path === selectedPath);
   const suggestedPaths = Object.fromEntries(result.suggestions.map(item => [item.target, item.sourcePath ?? ""]));
@@ -502,7 +514,7 @@ function DiscoveryReview({
   const previewFor = (row: DataSourceDiscoveryResult["preview"][number]) => {
     const values: Record<string, string> = {};
     const issues = row.issues.filter(issue =>
-      !/Choose a source for required|must be a non-empty string|not a supported date|source record ID repeats|Suggested asset identifier does not match/i.test(issue),
+      !/Choose a source for required|must be a non-empty string|not a supported date|source record ID repeats/i.test(issue),
     );
     let invalid = false;
     const eventPath = mappingPaths.eventType;
@@ -534,10 +546,18 @@ function DiscoveryReview({
     const assetValue = assetPath ? row.values[assetPath] : undefined;
     if (usable(assetValue) && assetPath) {
       values.assetKey = assetValue!;
-      if (assetPath !== originalAssetPath) issues.push("This corrected asset field has not been matched. Only exact active asset keys are associated.");
-      else if (row.issues.some(issue => issue.startsWith("Suggested asset identifier does not match"))) {
-        issues.push("Suggested asset identifier does not match an active registered KuduNS asset key.");
-        invalid = true;
+      if (assetPath !== originalAssetPath) {
+        issues.push("This alternative identifier is checked against exact asset keys and this source’s registered identifiers during import; unmatched values remain unassociated.");
+      } else if (row.assetMatch?.status === "matched") {
+        issues.push(row.assetMatch.matchType === "registered_external_identifier"
+          ? "Matches a registered external identifier for this source."
+          : "Matches an active registered asset key.");
+      } else if (row.assetMatch?.status === "ambiguous") {
+        issues.push("The asset identifier is ambiguous; no asset association will be made.");
+      } else if (row.assetMatch?.matchType === "name_suggestion") {
+        issues.push("A name match is only a suggestion; no automatic asset association will be made.");
+      } else if (row.assetMatch?.status === "unmatched") {
+        issues.push("No registered asset identifier matched; the event may be imported without an asset association.");
       }
     } else if (assetPath && assetValue !== "(missing)" && assetValue !== undefined && assetValue !== "null") {
       issues.push("Asset key must be a string or finite number."); invalid = true;
@@ -562,11 +582,36 @@ function DiscoveryReview({
       </div>
       <span className="status-pill">{result.sourceType.replace("_", " ").toUpperCase()}</span>
     </div>
+    {selectedPath && mappingTemplateSources.length > 0 && <div className="mapping-reuse-control">
+      <label className="field"><span>Reuse an approved mapping</span>
+        <select
+          value={mappingTemplateSourceId}
+          onChange={event => onMappingTemplateSourceChange(event.target.value)}
+          data-testid="select-reuse-mapping-source"
+        >
+          <option value="">Choose a source mapping</option>
+          {mappingTemplateSources.map(source => <option value={source.id} key={source.id}>
+            {source.displayName} · {source.sourceType.replace("_", " ")}
+          </option>)}
+        </select>
+      </label>
+      <button
+        type="button"
+        className="button-secondary"
+        onClick={onApplyMappingTemplate}
+        disabled={!mappingTemplateSourceId || mappingTemplateBusy}
+        data-testid="button-apply-reuse-mapping"
+      >
+        {mappingTemplateBusy ? "Loading mapping…" : "Use approved mapping"}
+      </button>
+      <p className="field-hint">Copies field paths from an active mapping into this source’s draft selections. Review the examples, then validate and activate separately.</p>
+      {mappingTemplateMessage && <p className="field-hint" role="status" data-testid="text-reuse-mapping-status">{mappingTemplateMessage}</p>}
+    </div>}
     <label className="field"><span>Record collection</span>
       <select value={selectedPath} onChange={event => onSelectPath(event.target.value)} data-testid="select-discovery-record-path">
         <option value="">Choose a record collection</option>
         {result.recordPaths.map(item => <option key={item.path} value={item.path} disabled={!item.supported}>
-          {item.path === "$" ? "Top-level array" : item.path} · {item.recordCount} records{item.supported ? "" : " · unsupported path"}
+          {item.path === "$" ? "Top-level array" : item.path} · {item.recordCount} {result.sourceType === "rest_api" ? "sampled records" : "records"}{item.supported ? "" : " · unsupported path"}
         </option>)}
       </select>
     </label>
@@ -591,7 +636,7 @@ function DiscoveryReview({
         </tr>)}</tbody>
       </table></div>
       <div className="discovery-preview-records" data-testid="list-discovery-preview-records">
-        <h3>Sample records · first {result.preview.length} of {selected.recordCount}</h3>
+        <h3>Sample records · first {result.preview.length} of {selected.recordCount}{result.sourceType === "rest_api" ? ` across ${result.sampledPageCount} page${result.sampledPageCount === 1 ? "" : "s"}` : ""}</h3>
         {result.preview.map(row => {
           const preview = previewFor(row);
           return <article className="discovery-preview-record" key={row.recordNumber}>
@@ -638,12 +683,18 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
   const [discoveryError, setDiscoveryError] = useState("");
   const [discoveryConfigurationKey, setDiscoveryConfigurationKey] = useState("");
+  const [mappingTemplateSources, setMappingTemplateSources] = useState<DataSourceRecord[]>([]);
+  const [mappingTemplateSourceId, setMappingTemplateSourceId] = useState("");
+  const [mappingTemplateBusy, setMappingTemplateBusy] = useState(false);
+  const [mappingTemplateMessage, setMappingTemplateMessage] = useState("");
   function clearDiscovery() {
     setDiscovery(null);
     setSelectedRecordPath("");
     setMappingPaths({});
     setDiscoveryError("");
     setDiscoveryConfigurationKey("");
+    setMappingTemplateSourceId("");
+    setMappingTemplateMessage("");
   }
   function changeConfiguration(setter: (value: string) => void, value: string) {
     setter(value);
@@ -705,11 +756,13 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   }
   async function runDiscovery() {
     setDiscoveryError("");
+    setMappingTemplateSourceId("");
+    setMappingTemplateMessage("");
     if (type === "manual" || !validate()) return;
     setDiscoveryBusy(true);
     try {
       const configuration = configurationFromForm();
-      const result = await discoverDataSource(type, configuration, selectedRecordPath || undefined);
+      const result = await discoverDataSource(type, configuration, selectedRecordPath || undefined, sourceKey.trim() || undefined);
       const chosenPath = result.selectedRecordPath ?? "";
       setSelectedRecordPath(chosenPath);
       setMappingPaths(Object.fromEntries(result.suggestions.map(suggestion => [suggestion.target, suggestion.sourcePath ?? ""])));
@@ -732,6 +785,8 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   function selectDiscoveryPath(path: string) {
     setSelectedRecordPath(path);
     setMappingPaths({});
+    setMappingTemplateSourceId("");
+    setMappingTemplateMessage("");
     setDiscoveryConfigurationKey("");
     if (type === "rest_api" || type === "json_file") setRecordsPath(path === "$" ? "" : path);
     setDiscovery(current => current ? {
@@ -743,6 +798,71 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       warnings: path ? ["Run discovery again to preview this collection."] : ["Choose a record collection."],
     } : current);
   }
+  async function applyMappingTemplate() {
+    if (!mappingTemplateSourceId || !discovery) return;
+    setMappingTemplateBusy(true);
+    setMappingTemplateMessage("");
+    try {
+      const response = await listDataSourceEventMappings(mappingTemplateSourceId);
+      const active = response.items.find(mapping => mapping.status === "active");
+      if (!active) {
+        setMappingTemplateMessage("That source has no active approved mapping.");
+        return;
+      }
+      const definition = active.definition as unknown as EventMappingDefinition;
+      const availablePaths = new Set(discovery.fields.map(field => field.path));
+      const eventTypePath = definition.eventType;
+      const occurredAtPath = definition.occurredAt;
+      if (
+        !eventTypePath || !occurredAtPath ||
+        !availablePaths.has(eventTypePath) || !availablePaths.has(occurredAtPath)
+      ) {
+        setMappingTemplateMessage("The required fields from that mapping are not present in this discovery sample. No mapping was applied.");
+        return;
+      }
+      const copied: Record<string, string> = {
+        eventType: eventTypePath,
+        occurredAt: occurredAtPath,
+      };
+      if (definition.sourceRecordId && availablePaths.has(definition.sourceRecordId)) copied.sourceRecordId = definition.sourceRecordId;
+      if (definition.assetKey && availablePaths.has(definition.assetKey)) copied.assetKey = definition.assetKey;
+      for (const target of ["message", "severity", "errorCode"] as const) {
+        const path = definition.payload?.[target];
+        if (path && availablePaths.has(path)) copied[target] = path;
+      }
+      setMappingPaths(copied);
+      setMappingTemplateMessage(`Copied active mapping version ${active.version}. Review it as a draft; it is not activated automatically.`);
+    } catch (cause) {
+      setMappingTemplateMessage(displayError(cause));
+    } finally {
+      setMappingTemplateBusy(false);
+    }
+  }
+  useEffect(() => {
+    let active = true;
+    const loadSources = async () => {
+      try {
+        const pageSize = 25;
+        const first = await listDataSources({ page: 1, pageSize, enabled: "all" });
+        const sources = [...first.items];
+        const pageCount = Math.ceil(first.total / pageSize);
+        for (let page = 2; page <= pageCount; page += 1) {
+          const next = await listDataSources({ page, pageSize, enabled: "all" });
+          sources.push(...next.items);
+        }
+        if (active) {
+          setMappingTemplateSources(sources.filter(source =>
+            source.id !== (editing ? id : "") &&
+            (source.sourceType === "rest_api" || source.sourceType === "json_file" || source.sourceType === "csv_file"),
+          ));
+        }
+      } catch {
+        if (active) setMappingTemplateSources([]);
+      }
+    };
+    void loadSources();
+    return () => { active = false; };
+  }, [editing, id]);
   useEffect(() => {
     if (!editing) { setInitialLoading(false); return; }
     let active = true;
@@ -1023,7 +1143,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       </div>}
       {type === "manual" && <div className="notice" data-testid="notice-manual-source">Manual source is a reference record. No external connection or ingestion is available.</div>}
       {type !== "manual" && <>
-        <div className="form-section"><h2>Discover and review</h2><p>Discovery makes one bounded read-only REST GET or reads the selected local file. It does not import, create assets, or activate a mapping.</p></div>
+        <div className="form-section"><h2>Discover and review</h2><p>Discovery makes one bounded REST GET or up to three pages using the configured pagination, or reads the selected local file. It does not import, create assets, or activate a mapping.</p></div>
         {discoveryError && <div className="notice error" role="alert" data-testid="error-data-discovery">{discoveryError}</div>}
         <div className="form-actions"><button className="button" type="button" onClick={() => void runDiscovery()} disabled={busy || discoveryBusy} data-testid="button-discover-source">
           {discoveryBusy ? "Discovering…" : "Discover structure & preview"}
@@ -1034,6 +1154,15 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
           onSelectPath={selectDiscoveryPath}
           mappingPaths={mappingPaths}
           onChangeMappingPath={(target, path) => setMappingPaths(current => ({ ...current, [target]: path }))}
+          mappingTemplateSources={mappingTemplateSources}
+          mappingTemplateSourceId={mappingTemplateSourceId}
+          onMappingTemplateSourceChange={sourceId => {
+            setMappingTemplateSourceId(sourceId);
+            setMappingTemplateMessage("");
+          }}
+          onApplyMappingTemplate={applyMappingTemplate}
+          mappingTemplateBusy={mappingTemplateBusy}
+          mappingTemplateMessage={mappingTemplateMessage}
         />}
       </>}
       <div className="form-actions"><Link className="button button-quiet" href={editing ? `/data-sources/${encodeURIComponent(id)}` : "/data-sources"} data-testid="button-cancel-data-source">Cancel</Link><div className="form-actions-end"><button className="button button-primary" type="submit" disabled={busy || discoveryBusy} data-testid="button-submit-data-source">{busy ? "Saving…" : editing ? "Save changes" : "Create data source"}</button></div></div>

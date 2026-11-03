@@ -280,11 +280,12 @@ paths:
       operationId: discoverDataSource
       summary: Inspect one REST, JSON, or CSV source on demand
       description: |
-        Makes one bounded GET for a REST source or reads the configured file
-        inside the import directory. It returns candidate record collections,
+        Makes one bounded GET, or up to three explicitly paginated GETs, for a REST source;
+        file discovery reads the configured file inside the import directory. It returns candidate record collections,
         redacted sample fields, mapping suggestions, and preview validation.
         It does not persist events, create assets, or activate a mapping.
-        Choose a collection explicitly when more than one is found.
+        Choose a collection explicitly when more than one is found. REST sampling
+        stops at the configured record limit and never runs in the background.
       requestBody:
         required: true
         content:
@@ -1302,13 +1303,22 @@ components:
           type: string
           maxLength: 256
           description: Select one collection path returned by an earlier discovery response.
+        sourceKey:
+          type: string
+          maxLength: 80
+          description: Optional source key used only to preview registered external-identifier matches.
     DataSourceDiscoveryResult:
       type: object
-      required: [sourceType, recordPaths, selectedRecordPath, fields, suggestions, preview, warnings]
+      required: [sourceType, sampledPageCount, recordPaths, selectedRecordPath, fields, suggestions, preview, warnings]
       properties:
         sourceType:
           type: string
           enum: [rest_api, json_file, csv_file]
+        sampledPageCount:
+          type: integer
+          minimum: 1
+          maximum: 3
+          description: Number of REST pages sampled; file discovery reports one.
         recordPaths:
           type: array
           items:
@@ -1316,7 +1326,10 @@ components:
             required: [path, recordCount, supported]
             properties:
               path: { type: string }
-              recordCount: { type: integer, minimum: 0 }
+              recordCount:
+                type: integer
+                minimum: 0
+                description: For REST, records inspected in the bounded sample; for files, the record count in the file.
               supported: { type: boolean }
         selectedRecordPath:
           type: [string, "null"]
@@ -1375,6 +1388,15 @@ components:
               normalized:
                 type: object
                 additionalProperties: { type: string }
+              assetMatch:
+                type: object
+                required: [status, confidence]
+                properties:
+                  status: { type: string, enum: [matched, unmatched, ambiguous] }
+                  confidence: { type: number, minimum: 0, maximum: 1 }
+                  matchType:
+                    type: string
+                    enum: [asset_key, registered_external_identifier, name_suggestion]
         warnings:
           type: array
           items: { type: string }

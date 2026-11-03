@@ -191,16 +191,24 @@ export interface SuggestedFieldMapping {
   note: string;
 }
 
+export interface DiscoveryAssetMatch {
+  status: "matched" | "unmatched" | "ambiguous";
+  confidence: number;
+  matchType?: "asset_key" | "registered_external_identifier" | "name_suggestion";
+}
+
 export interface DiscoveryPreviewRecord {
   recordNumber: number;
   state: "valid" | "warning" | "rejected";
   issues: string[];
   values: Record<string, string>;
   normalized: Record<string, string>;
+  assetMatch?: DiscoveryAssetMatch;
 }
 
 export interface DataSourceDiscoveryResult {
   sourceType: "rest_api" | "json_file" | "csv_file";
+  sampledPageCount: number;
   recordPaths: DiscoveryRecordPath[];
   selectedRecordPath: string | null;
   fields: DiscoveredField[];

@@ -243,10 +243,16 @@ export function discoverDataSource(
   sourceType: Exclude<DataSourceType, "manual">,
   configuration: DataSourceConfigurationInput,
   recordPath?: string,
+  sourceKey?: string,
 ): Promise<DataSourceDiscoveryResult> {
   return request("/api/v1/data-sources/discover", {
     method: "POST",
-    body: JSON.stringify({ sourceType, configuration, ...(recordPath ? { recordPath } : {}) }),
+    body: JSON.stringify({
+      sourceType,
+      configuration,
+      ...(recordPath ? { recordPath } : {}),
+      ...(sourceKey ? { sourceKey } : {}),
+    }),
   });
 }
 

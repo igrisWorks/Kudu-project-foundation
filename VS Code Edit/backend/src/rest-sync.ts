@@ -870,7 +870,7 @@ export async function fetchRestDiscoveryDocument(
       url,
       configuration.pagination,
       initialCheckpoint(configuration.pagination),
-      configuration.pagination?.pageSize ?? limits.maxRecords,
+      limits.maxRecords,
     );
     bytes = await requestJsonWithRetry(
       discoveryRequest.url,
@@ -888,6 +888,120 @@ export async function fetchRestDiscoveryDocument(
   } catch {
     throw new ApiFailure(502, "REST_INVALID_JSON", "The remote response was not valid JSON.");
   }
+}
+
+function replaceDiscoveryRecords(document: unknown, recordPath: string, records: unknown[]): unknown {
+  if (recordPath === "$") return records;
+  const parts = recordPath.split(".");
+  const replace = (current: unknown, index: number): Record<string, unknown> => {
+    if (!isRecord(current)) {
+      throw new RestRequestError("REST_RECORDS_PATH_INVALID", "The selected record collection changed shape during discovery.", 400);
+    }
+    const key = parts[index];
+    if (!key || !Object.hasOwn(current, key)) {
+      throw new RestRequestError("REST_RECORDS_PATH_INVALID", "The selected record collection changed shape during discovery.", 400);
+    }
+    return {
+      ...current,
+      [key]: index === parts.length - 1 ? records : replace(current[key], index + 1),
+    };
+  };
+  return replace(document, 0);
+}
+
+export async function extendRestDiscoverySample(
+  configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }>,
+  firstDocument: unknown,
+  recordPath: string,
+  policy: NetworkPolicy = {},
+): Promise<{ document: unknown; sampledPageCount: number }> {
+  const pagination = configuration.pagination;
+  if (!pagination) return { document: firstDocument, sampledPageCount: 1 };
+  const url = endpointUrl(configuration);
+  const limits = validateLimits(configuration);
+  if (!url || !limits) throw new ApiFailure(400, "SOURCE_CONFIGURATION_INVALID", "Configure a valid endpoint path and bounded request limits.");
+  if (configuration.authMode === "bearer" && url.protocol !== "https:") {
+    throw new ApiFailure(400, "BEARER_REQUIRES_HTTPS", "Bearer authentication requires HTTPS.");
+  }
+  const token = parseBearerToken(configuration);
+  if (configuration.authMode === "bearer" && !token) {
+    throw new ApiFailure(400, "BEARER_TOKEN_UNAVAILABLE", "The configured bearer-token environment variable is not available.");
+  }
+
+  const recordsConfiguration = { ...configuration, recordsPath: recordPath === "$" ? "" : recordPath };
+  let checkpoint = initialCheckpoint(pagination);
+  let requestedLimit = pageUrl(url, pagination, checkpoint, limits.maxRecords).requestedLimit;
+  let currentDocument = firstDocument;
+  let currentRecords = recordsFromResponse(currentDocument, recordsConfiguration);
+  const combinedRecords = currentRecords.slice(0, limits.maxRecords);
+  let remaining = limits.maxRecords - combinedRecords.length;
+  let sampledPageCount = 1;
+  const cursorHashes: string[] = [];
+
+  for (let page = 1; page < MAX_PAGES_PER_ACTION && remaining > 0; page += 1) {
+    if (pagination.strategy === "cursor") {
+      const nextCursor = nextCursorFromResponse(currentDocument, pagination);
+      if (!nextCursor) break;
+      const hash = createHash("sha256").update(nextCursor).digest("hex");
+      if (cursorHashes.includes(hash)) {
+        throw new ApiFailure(400, "REST_CURSOR_REPEATED", "The remote API repeated a cursor; discovery stopped to prevent an infinite loop.");
+      }
+      cursorHashes.push(hash);
+      checkpoint = { ...checkpoint, cursor: nextCursor, cursorHashes: cursorHashes.slice(-MAX_CURSOR_HISTORY) };
+    } else {
+      if (currentRecords.length < requestedLimit) break;
+      checkpoint = pagination.strategy === "offset"
+        ? { ...checkpoint, offset: (checkpoint.offset ?? pagination.startOffset ?? 0) + currentRecords.length }
+        : { ...checkpoint, page: (checkpoint.page ?? pagination.startPage ?? 1) + 1 };
+    }
+
+    const requestIntervalMs = pagination.requestIntervalMs ?? 0;
+    if (requestIntervalMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, requestIntervalMs));
+    }
+    let bytes: Buffer;
+    let request: ReturnType<typeof pageUrl>;
+    try {
+      request = pageUrl(url, pagination, checkpoint, remaining);
+      bytes = await requestJsonWithRetry(
+        request.url,
+        token ? `Bearer ${token}` : undefined,
+        limits.timeoutMs,
+        limits.maxResponseBytes,
+        policy,
+      );
+    } catch (cause) {
+      if (cause instanceof RestRequestError) throw new ApiFailure(cause.statusCode, cause.code, cause.message);
+      throw new ApiFailure(502, "REST_REQUEST_FAILED", "The remote request failed during bounded discovery.");
+    }
+
+    let nextDocument: unknown;
+    try {
+      nextDocument = JSON.parse(bytes.toString("utf8")) as unknown;
+    } catch {
+      throw new ApiFailure(502, "REST_INVALID_JSON", "A paginated discovery response was not valid JSON.");
+    }
+    try {
+      currentRecords = recordsFromResponse(nextDocument, recordsConfiguration);
+    } catch (cause) {
+      if (cause instanceof RestRequestError) {
+        throw new ApiFailure(502, cause.code, "A paginated discovery response did not contain the selected record collection.");
+      }
+      throw cause;
+    }
+    const acceptedRecords = currentRecords.slice(0, remaining);
+    combinedRecords.push(...acceptedRecords);
+    remaining -= acceptedRecords.length;
+    currentDocument = nextDocument;
+    requestedLimit = request.requestedLimit;
+    sampledPageCount += 1;
+    if (currentRecords.length < requestedLimit) break;
+  }
+
+  return {
+    document: replaceDiscoveryRecords(firstDocument, recordPath, combinedRecords),
+    sampledPageCount,
+  };
 }
 
 export function registerRestSyncRoutes(

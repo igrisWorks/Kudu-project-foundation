@@ -12,9 +12,15 @@ import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import { ApiFailure } from "./errors.js";
 import { parseCsv, readBoundedFile, resolveImportFile } from "./file-import.js";
-import { normalizeOccurrenceTimestamp, readMappedField, validateEventMappingDefinition } from "./event-mappings.js";
+import {
+  loadAssetMatchContext,
+  normalizeOccurrenceTimestamp,
+  readMappedField,
+  resolveAssetIdentifier,
+  validateEventMappingDefinition,
+} from "./event-mappings.js";
 import type { Database, StoredSourceConfiguration } from "./database.js";
-import { fetchRestDiscoveryDocument } from "./rest-sync.js";
+import { extendRestDiscoverySample, fetchRestDiscoveryDocument } from "./rest-sync.js";
 import { validateDataSourceCreate } from "./registry-validation.js";
 
 const MAX_DISCOVERY_DEPTH = 8;
@@ -33,33 +39,47 @@ interface LocatedArray {
   supported: boolean;
 }
 
-const aliases: Record<SuggestedTargetField, { names: string[]; label: string; required: boolean }> = {
+const aliases: Record<SuggestedTargetField, { names: Record<string, number>; label: string; required: boolean }> = {
   eventType: {
-    names: ["eventtype", "faulttype", "alarmtype", "type", "event", "category"],
+    names: {
+      eventtype: 0.98, faulttype: 0.98, alarmtype: 0.98, eventname: 0.94, faultname: 0.94,
+      alarmname: 0.94, category: 0.8, type: 0.74, event: 0.68,
+    },
     label: "Event type", required: true,
   },
   occurredAt: {
-    names: ["occurredat", "timestamp", "eventtime", "faulttime", "datetime", "time", "createdat"],
+    names: {
+      occurredat: 0.98, eventtime: 0.96, faulttime: 0.96, eventdatetime: 0.96, faulttimestamp: 0.96,
+      alarmdatetime: 0.96, occurredtime: 0.94, alarmtime: 0.92, timestamp: 0.9, timestamputc: 0.9,
+      datetime: 0.88, createdat: 0.82, receivedat: 0.8, time: 0.68, created: 0.64,
+    },
     label: "Occurrence time", required: true,
   },
   sourceRecordId: {
-    names: ["sourcerecordid", "eventid", "faultid", "recordid", "id"],
+    names: {
+      sourcerecordid: 0.99, eventid: 0.98, faultid: 0.98, alarmid: 0.96, recordid: 0.96,
+      occurrenceid: 0.94, eventuuid: 0.92, faultnumber: 0.82, id: 0.66,
+    },
     label: "Source record ID", required: false,
   },
   assetKey: {
-    names: ["assetkey", "assetid", "machineid", "equipmentid", "deviceid", "machinename", "equipmentname"],
+    names: {
+      assetkey: 0.98, assetid: 0.94, machineid: 0.9, equipmentid: 0.9, deviceid: 0.9,
+      machinekey: 0.9, equipmentkey: 0.9, devicekey: 0.9, machinename: 0.84,
+      equipmentname: 0.84, unitid: 0.8, stationid: 0.8, lineid: 0.76,
+    },
     label: "Asset identifier", required: false,
   },
   message: {
-    names: ["message", "description", "faultmessage", "eventmessage"],
+    names: { faultmessage: 0.98, eventmessage: 0.98, alarmmessage: 0.98, message: 0.95, description: 0.9, details: 0.83, text: 0.7 },
     label: "Message", required: false,
   },
   severity: {
-    names: ["severity", "priority", "level"],
+    names: { severity: 0.98, severitylevel: 0.96, alarmpriority: 0.94, priority: 0.89, criticality: 0.85, level: 0.74 },
     label: "Severity", required: false,
   },
   errorCode: {
-    names: ["faultcode", "errorcode", "code"],
+    names: { faultcode: 0.98, errorcode: 0.98, alarmcode: 0.95, diagnosticcode: 0.95, eventcode: 0.83, code: 0.7 },
     label: "Error code", required: false,
   },
 };
@@ -161,10 +181,13 @@ function collectLeafFields(records: Record<string, unknown>[], csv = false): Dis
           : typeof value === "string" || typeof value === "number" || typeof value === "boolean"
             ? typeof value as "string" | "number" | "boolean"
             : "unknown";
-    if (csv && typeof value === "string") {
+    if (typeof value === "string" && normalizeOccurrenceTimestamp(value)) {
+      valueType = "datetime";
+    } else if (typeof value === "number" && normalizeOccurrenceTimestamp(value)) {
+      valueType = "datetime";
+    } else if (csv && typeof value === "string") {
       if (/^(true|false)$/i.test(value.trim())) valueType = "boolean";
       else if (/^-?(?:\d+\.?\d*|\.\d+)$/.test(value.trim()) && Number.isFinite(Number(value))) valueType = "number";
-      else if (value.length >= 8 && !Number.isNaN(Date.parse(value))) valueType = "datetime";
     }
     const foundTypes = types.get(path) ?? new Set<DiscoveredField["valueType"]>();
     foundTypes.add(valueType);
@@ -194,25 +217,35 @@ function lastPathPart(path: string): string {
 
 function isTimestampExample(value: string): boolean {
   if (/^-?\d{9,16}$/.test(value)) return Boolean(normalizeOccurrenceTimestamp(Number(value)));
-  return !Number.isNaN(Date.parse(value)) && value.length >= 8;
+  return Boolean(normalizeOccurrenceTimestamp(value));
 }
 
 function makeSuggestions(fields: DiscoveredField[]): SuggestedFieldMapping[] {
   return (Object.entries(aliases) as Array<[SuggestedTargetField, typeof aliases[SuggestedTargetField]]>).map(([target, spec]) => {
     const candidates = fields.flatMap(field => {
       const name = lastPathPart(field.path);
-      const index = spec.names.indexOf(name);
-      if (index < 0) return [];
-      let score = 0.98 - index * 0.035;
+      const aliasScore = spec.names[name];
+      if (aliasScore === undefined) return [];
+      let score = aliasScore;
       const examples = field.examples;
       if (target === "occurredAt") {
-        if (examples.some(isTimestampExample)) score = Math.min(0.99, score + 0.06);
-        else score -= 0.35;
+        if (examples.some(isTimestampExample)) score = Math.min(0.99, score + 0.08);
+        else score -= 0.38;
+        if (field.valueType === "datetime") score = Math.min(0.99, score + 0.04);
       }
-      if (target === "eventType" && !examples.some(example => example !== "null" && example !== "[object]" && example !== "[array: 0]")) score -= 0.3;
-      if (target === "sourceRecordId" && name === "id") score = 0.66;
-      if (target === "assetKey" && name !== "assetkey") score = Math.min(score, 0.76);
-      if (target === "errorCode" && name === "code") score = Math.min(score, 0.72);
+      const stringOrNumber = field.valueType === "string" || field.valueType === "number";
+      if (target === "eventType") {
+        if (field.valueType === "string") score += 0.03;
+        else score -= 0.28;
+      }
+      if (target === "sourceRecordId" || target === "assetKey" || target === "severity" || target === "errorCode") {
+        if (!stringOrNumber) score -= 0.18;
+      }
+      if (target === "message") {
+        if (field.valueType === "string") score += 0.02;
+        else score -= 0.2;
+      }
+      if (field.valueType === "mixed") score -= 0.1;
       return [{ field, score }];
     }).sort((left, right) => right.score - left.score || left.field.path.localeCompare(right.field.path));
     const top = candidates[0];
@@ -346,7 +379,7 @@ export function buildDiscoveryResult(
   if (fields.length) warnings.push("Sensitive-looking field values are hidden in examples. Unmapped source fields remain in each imported event payload.");
   const preview = toPreview(records, fields, suggestions);
   return {
-    result: { sourceType: sourceType as DataSourceDiscoveryResult["sourceType"], recordPaths, selectedRecordPath, fields, suggestions, preview, warnings },
+    result: { sourceType: sourceType as DataSourceDiscoveryResult["sourceType"], sampledPageCount: 1, recordPaths, selectedRecordPath, fields, suggestions, preview, warnings },
     selectedRows: records,
   };
 }
@@ -367,6 +400,16 @@ export function registerDataDiscoveryRoutes(
     if (sourceType !== "rest_api" && sourceType !== "json_file" && sourceType !== "csv_file") {
       throw new ApiFailure(400, "DISCOVERY_SOURCE_UNSUPPORTED", "Discovery supports REST API, JSON and CSV sources.");
     }
+    let discoverySourceKey = "";
+    if (Object.hasOwn(request.body, "sourceKey")) {
+      if (typeof request.body.sourceKey !== "string" || request.body.sourceKey.trim().length > 80) {
+        throw new ApiFailure(400, "DISCOVERY_SOURCE_KEY_INVALID", "The optional source key must be valid text up to 80 characters.");
+      }
+      discoverySourceKey = request.body.sourceKey.trim();
+      if (discoverySourceKey && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(discoverySourceKey)) {
+        throw new ApiFailure(400, "DISCOVERY_SOURCE_KEY_INVALID", "Use a source key containing letters, numbers, dots, dashes, or underscores.");
+      }
+    }
     let validated;
     try {
       validated = validateDataSourceCreate({
@@ -385,10 +428,13 @@ export function registerDataDiscoveryRoutes(
       : undefined;
     let document: unknown;
     let requestedPath = selectedPath;
+    let restConfiguration: Extract<StoredSourceConfiguration, { kind: "rest_api" }> | undefined;
     if (sourceType === "rest_api") {
       const config = validated.configuration;
       if (config.kind !== "rest_api") throw new ApiFailure(400, "DISCOVERY_REQUEST_INVALID", "The REST configuration is invalid.");
-      document = await fetchRestDiscoveryDocument(config as StoredSourceConfiguration & Extract<StoredSourceConfiguration, { kind: "rest_api" }>, policy);
+      const restConfig = config as StoredSourceConfiguration & Extract<StoredSourceConfiguration, { kind: "rest_api" }>;
+      restConfiguration = restConfig;
+      document = await fetchRestDiscoveryDocument(restConfig, policy);
       if (!requestedPath && config.recordsPath) requestedPath = config.recordsPath;
     } else {
       const config = validated.configuration;
@@ -411,7 +457,24 @@ export function registerDataDiscoveryRoutes(
       }
       if (!requestedPath && isJsonConfiguration(config) && config.recordsPath) requestedPath = config.recordsPath;
     }
-    const { result, selectedRows } = buildDiscoveryResult(sourceType, document, requestedPath);
+    let discovery = buildDiscoveryResult(sourceType, document, requestedPath);
+    if (sourceType === "rest_api" && restConfiguration?.pagination && discovery.result.selectedRecordPath) {
+      const sample = await extendRestDiscoverySample(
+        restConfiguration,
+        document,
+        discovery.result.selectedRecordPath,
+        policy,
+      );
+      if (sample.sampledPageCount > 1) {
+        document = sample.document;
+        discovery = buildDiscoveryResult(sourceType, document, requestedPath ?? discovery.result.selectedRecordPath);
+        discovery.result.sampledPageCount = sample.sampledPageCount;
+        discovery.result.warnings.push(
+          `Discovery sampled ${sample.sampledPageCount} pages; this is a bounded sample, not a total source count.`,
+        );
+      }
+    }
+    const { result, selectedRows } = discovery;
     if (result.selectedRecordPath === "$" && sourceType !== "csv_file") {
       result.selectedRecordPath = "$";
     }
@@ -423,25 +486,34 @@ export function registerDataDiscoveryRoutes(
     if (result.selectedRecordPath && result.selectedRecordPath !== "$") {
       result.warnings.push("This record path is a preview selection. Save it in source settings before Sync now or file import.");
     }
-    // Confirm exact registered asset keys for the preview without auto-creating or associating assets.
+    // Reuse the ingestion resolver for preview only; suggestions never associate or create assets.
     const assetSuggestion = result.suggestions.find(item => item.target === "assetKey");
     if (assetSuggestion?.sourcePath) {
-      let unmatchedAsset = false;
+      const assetContext = await loadAssetMatchContext(db, discoverySourceKey);
+      let nonMatchedAsset = false;
       for (const [index, record] of selectedRows.slice(0, MAX_PREVIEW_RECORDS).entries()) {
         const value = readMappedField(record as JsonObject, assetSuggestion.sourcePath);
         if (value === undefined || value === null || value === "") continue;
-        const exists = await db.selectFrom("assets").select("id")
-          .where("asset_key", "=", String(value)).where("archived_at", "is", null).executeTakeFirst();
-        if (!exists) {
-          unmatchedAsset = true;
-          const preview = result.preview[index];
-          if (preview) {
-            preview.state = "rejected";
-            preview.issues.push("Suggested asset identifier does not match an active registered KuduNS asset key.");
-          }
+        const resolution = resolveAssetIdentifier(String(value), assetContext);
+        const preview = result.preview[index];
+        if (!preview) continue;
+        const status = resolution.provenance.status;
+        const confidence = resolution.provenance.confidence;
+        const matchType = resolution.provenance.matchType;
+        if (status === "matched" || status === "ambiguous" || status === "unmatched") {
+          preview.assetMatch = {
+            status,
+            confidence: typeof confidence === "number" ? confidence : 0,
+            ...(matchType === "asset_key" || matchType === "registered_external_identifier" || matchType === "name_suggestion"
+              ? { matchType }
+              : {}),
+          };
         }
+        if (status !== "matched") nonMatchedAsset = true;
       }
-      if (unmatchedAsset) result.warnings.push("One or more suggested asset identifiers do not exactly match an active KuduNS asset key. No asset was automatically associated.");
+      if (nonMatchedAsset) result.warnings.push(
+        "Some suggested asset identifiers are unmatched or ambiguous. They remain unassociated; name matches are suggestions only.",
+      );
     }
     return result;
   });

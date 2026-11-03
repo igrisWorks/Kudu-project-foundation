@@ -93,7 +93,7 @@ Example:
 | `POST` | `/api/v1/data-sources` | Register source metadata; returns `201`. Does not connect or ingest. |
 | `GET` | `/api/v1/data-sources/{id}` | Get metadata and redacted configuration status. |
 | `PATCH` | `/api/v1/data-sources/{id}` | Update supplied metadata. Changing source type requires matching configuration. |
-| `POST` | `/api/v1/data-sources/discover` | Explicitly inspect one REST, JSON, or CSV source and return candidate collections, field suggestions, and a bounded preview. |
+| `POST` | `/api/v1/data-sources/discover` | Explicitly inspect REST (up to three configured pages), JSON, or CSV and return candidate collections, field suggestions, and a bounded preview. |
 
 Supported source types are `rest_api`, `json_file`, `csv_file`, and `manual`. REST configuration accepts an HTTP(S) base URL without credentials, query parameters, or fragments, plus a relative endpoint path. Only `GET` and JSON responses are supported. Configure the JSON records path (a dot path or blank for a top-level array), timeout, response-size limit, and record-count limit (up to 100,000 records across a run). Pagination is opt-in; when configured, choose the source API's offset, page-number, or cursor convention, page size, query parameter names, optional date bounds, and request interval.
 

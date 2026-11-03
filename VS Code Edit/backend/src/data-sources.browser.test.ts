@@ -3,7 +3,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,6 +58,14 @@ test(
     assert.ok(existsSync(join(frontendDirectory, "index.html")), "Build the frontend before this browser smoke test.");
 
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "kuduns-browser-smoke-"));
+    const importsDirectory = join(temporaryDirectory, "imports");
+    await mkdir(importsDirectory);
+    await writeFile(join(importsDirectory, "reuse.json"), JSON.stringify([{
+      sourceRecordId: "browser-json-1",
+      eventType: "machine_fault",
+      occurredAt: "2026-11-03T13:00:00Z",
+      reading: 42,
+    }]));
     const data = Array.from({ length: 8 }, (_, index) => ({
       sourceRecordId: `browser-${index + 1}`,
       eventType: "machine_fault",
@@ -112,6 +120,7 @@ test(
       db: manager.db,
       localMode: true,
       localDatabase: manager,
+      importDirectory: importsDirectory,
       allowLoopbackRestTests: true,
       staticDirectory: frontendDirectory,
       logLevel: "silent",
@@ -228,6 +237,8 @@ test(
     if (!sourceEnabled) await click('[data-testid="checkbox-source-enabled"]');
     await click('[data-testid="button-discover-source"]');
     await waitFor("discovery fields", "Boolean(document.querySelector('[data-testid=\"select-discovery-map-eventType\"]'))");
+    const sampleSummary = await evaluate("document.querySelector('[data-testid=\"list-discovery-preview-records\"]')?.innerText ?? ''");
+    assert.match(sampleSummary, /across 3 pages/, "the browser shows that discovery used a bounded multi-page sample");
     await setValue('[data-testid="select-discovery-map-eventType"]', "eventType");
     await setValue('[data-testid="select-discovery-map-occurredAt"]', "occurredAt");
     await setValue('[data-testid="select-discovery-map-sourceRecordId"]', "sourceRecordId");
@@ -254,5 +265,48 @@ test(
     assert.ok(requestedOffsets.includes(8), `Expected the final empty-page probe at offset 8; saw ${requestedOffsets.join(",")}.`);
     const records = await manager.db.selectFrom("events").select("source_record_id").execute();
     assert.equal(records.length, 8);
+
+    await evaluate("window.location.href = '/data-sources/new'; true");
+    await waitFor("new data source form", "Boolean(document.querySelector('[data-testid=\"input-source-key\"]'))");
+    await setValue('[data-testid="input-source-key"]', "browser-json-reuse");
+    await setValue('[data-testid="input-source-display-name"]', "Browser JSON Reuse");
+    await setValue('[data-testid="select-data-source-type"]', "json_file");
+    await setValue('[data-testid="input-source-relative-path"]', "reuse.json");
+    await click('[data-testid="button-discover-source"]');
+    await waitFor("JSON discovery", "Boolean(document.querySelector('[data-testid=\"select-discovery-map-eventType\"]'))");
+    await waitFor(
+      "approved mapping reuse selector",
+      "Boolean(document.querySelector('[data-testid=\"select-reuse-mapping-source\"]'))",
+    );
+    const templateSourceId = await evaluate(`(() => {
+      const select = document.querySelector('[data-testid="select-reuse-mapping-source"]');
+      return [...(select?.options ?? [])].find(option => option.textContent?.includes('Browser Milestone 2 Fixture'))?.value ?? '';
+    })()`);
+    assert.ok(templateSourceId, "the active REST source should be available as a mapping template");
+    await setValue('[data-testid="select-reuse-mapping-source"]', templateSourceId);
+    await click('[data-testid="button-apply-reuse-mapping"]');
+    await waitFor(
+      "copied approved mapping",
+      "document.querySelector('[data-testid=\"text-reuse-mapping-status\"]')?.innerText.includes('Copied active mapping')",
+    );
+    const copiedPaths = await evaluate(`JSON.stringify({
+      eventType: document.querySelector('[data-testid="select-discovery-map-eventType"]')?.value,
+      occurredAt: document.querySelector('[data-testid="select-discovery-map-occurredAt"]')?.value,
+      sourceRecordId: document.querySelector('[data-testid="select-discovery-map-sourceRecordId"]')?.value
+    })`);
+    assert.deepEqual(JSON.parse(copiedPaths), {
+      eventType: "eventType",
+      occurredAt: "occurredAt",
+      sourceRecordId: "sourceRecordId",
+    });
+    await click('[data-testid="button-submit-data-source"]');
+    await waitFor("saved JSON source mapping draft", "Boolean(document.querySelector('[data-testid=\"mapping-draft-editor\"]'))");
+    const reusedSourceId = await evaluate("window.location.pathname.split('/').filter(Boolean).at(-1) ?? ''");
+    const reusedMapping = await manager.db.selectFrom("data_source_event_mappings")
+      .select(["status", "definition"])
+      .where("source_id", "=", reusedSourceId)
+      .executeTakeFirst();
+    assert.equal(reusedMapping?.status, "draft", "reusing an approved mapping must not auto-activate it");
+    assert.ok(JSON.stringify(reusedMapping?.definition).includes("sourceRecordId"));
   },
 );

@@ -131,7 +131,7 @@ export async function loadAssetMatchContext(db: Kysely<Database>, sourceKey: str
   };
 }
 
-function resolveAssetIdentifier(
+export function resolveAssetIdentifier(
   value: string,
   context: AssetMatchContext,
 ): { assetId?: string; provenance: JsonObject } {
