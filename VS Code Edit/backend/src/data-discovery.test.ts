@@ -373,3 +373,90 @@ test("source registration does not connect; explicit REST and nested JSON discov
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Local SQLite REST discovery accepts the Vite origin while preserving origin and private-network blocks", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "kuduns-discovery-local-origin-"));
+  let fixtureRequests = 0;
+  const remote = createServer((_request, response) => {
+    fixtureRequests += 1;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ faults: [{ eventType: "overheat", occurredAt: "2026-11-04T12:00:00Z" }] }));
+  });
+  let manager: LocalDatabaseManager | undefined;
+  let app: Awaited<ReturnType<typeof createApp>> | undefined;
+  const previousPort = process.env.PORT;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      remote.once("error", reject);
+      remote.listen(0, "127.0.0.1", resolve);
+    });
+    const fixturePort = (remote.address() as { port: number }).port;
+    manager = await LocalDatabaseManager.create(join(directory, "sqlite"));
+    app = await createApp({
+      db: manager.db,
+      localMode: true,
+      localDatabase: manager,
+      allowLoopbackRestTests: true,
+      restTrustedHosts: [],
+      logLevel: "silent",
+    });
+    // pnpm dev sets PORT=3000; Vite changeOrigin rewrites Host to its target
+    // but keeps the browser Origin and same-origin Fetch Metadata.
+    process.env.PORT = "3000";
+    const browserHeaders = {
+      host: "127.0.0.1:3000",
+      origin: "http://127.0.0.1:5173",
+      "sec-fetch-site": "same-origin",
+    };
+    const configuration = {
+      kind: "rest_api",
+      baseUrl: `http://127.0.0.1:${fixturePort}/api`,
+      endpointPath: "faults",
+      method: "GET",
+      authMode: "none",
+      timeoutMs: 2_000,
+      maxResponseBytes: 16_000,
+      maxRecords: 100,
+    };
+
+    const allowed = await app.inject({
+      method: "POST",
+      url: "/api/v1/data-sources/discover",
+      headers: browserHeaders,
+      payload: { sourceType: "rest_api", configuration, sourceKey: "vite-origin-source" },
+    });
+    assert.equal(allowed.statusCode, 200, allowed.body);
+    assert.equal(fixtureRequests, 1, "the request passed Local-mode origin validation and reached discovery");
+
+    const crossOrigin = await app.inject({
+      method: "POST",
+      url: "/api/v1/data-sources/discover",
+      headers: { ...browserHeaders, origin: "https://attacker.example", "sec-fetch-site": "cross-site" },
+      payload: { sourceType: "rest_api", configuration, sourceKey: "vite-origin-source" },
+    });
+    assert.equal(crossOrigin.statusCode, 403);
+    assert.equal(crossOrigin.json().error.code, "LOCAL_ORIGIN_REQUIRED");
+    assert.equal(fixtureRequests, 1, "a blocked origin must not reach the remote REST source");
+
+    const privateDestination = await app.inject({
+      method: "POST",
+      url: "/api/v1/data-sources/discover",
+      headers: browserHeaders,
+      payload: {
+        sourceType: "rest_api",
+        configuration: { ...configuration, baseUrl: "http://10.0.0.12/api" },
+        sourceKey: "vite-origin-source",
+      },
+    });
+    assert.equal(privateDestination.statusCode, 403);
+    assert.equal(privateDestination.json().error.code, "REST_DESTINATION_BLOCKED");
+    assert.equal(fixtureRequests, 1, "an untrusted private destination must remain blocked");
+  } finally {
+    if (previousPort === undefined) delete process.env.PORT;
+    else process.env.PORT = previousPort;
+    await app?.close();
+    await manager?.close();
+    await new Promise<void>(resolve => remote.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
