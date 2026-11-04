@@ -23,6 +23,19 @@ import type { Database } from "./database.js";
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const migrationNamePattern = /^\d{4}_[a-z0-9_]+\.sql$/;
+const migrationChecksum = (contents: string): string =>
+  createHash("sha256").update(contents).digest("hex");
+
+function migrationChecksums(contents: string): { current: string; accepted: string[] } {
+  const normalized = contents.replace(/\r\n?/g, "\n");
+  const accepted = [...new Set([
+    contents,
+    normalized,
+    normalized.replace(/\n/g, "\r\n"),
+  ].map(migrationChecksum))];
+  return { current: migrationChecksum(normalized), accepted };
+}
+
 const jsonColumns = new Set([
   "external_identifiers",
   "configuration",
@@ -156,12 +169,19 @@ export async function runSqliteMigrations(
     if (!available.has(name)) throw new Error(`Applied SQLite migration ${name} is missing from the application.`);
   }
 
-  const executeMigration = raw.transaction((name: string, checksum: string, contents: string) => {
+  const executeMigration = raw.transaction((
+    name: string,
+    checksum: string,
+    acceptedChecksums: string[],
+    contents: string,
+  ) => {
     const current = raw.prepare("SELECT checksum FROM app_schema_migrations WHERE name = ?").get(name) as
       | { checksum: string }
       | undefined;
     if (current) {
-      if (current.checksum !== checksum) throw new Error(`Applied SQLite migration ${name} has changed.`);
+      if (!acceptedChecksums.includes(current.checksum)) {
+        throw new Error(`Applied SQLite migration ${name} has changed.`);
+      }
       return false;
     }
     raw.exec(contents);
@@ -172,12 +192,16 @@ export async function runSqliteMigrations(
   const newlyApplied: string[] = [];
   for (const name of names) {
     const contents = await readFile(join(directory, name), "utf8");
-    const checksum = createHash("sha256").update(contents).digest("hex");
+    const checksums = migrationChecksums(contents);
     if (applied.has(name)) {
-      if (applied.get(name) !== checksum) throw new Error(`Applied SQLite migration ${name} has changed.`);
+      if (!checksums.accepted.includes(applied.get(name)!)) {
+        throw new Error(`Applied SQLite migration ${name} has changed.`);
+      }
       continue;
     }
-    if (executeMigration.immediate(name, checksum, contents)) newlyApplied.push(name);
+    if (executeMigration.immediate(name, checksums.current, checksums.accepted, contents)) {
+      newlyApplied.push(name);
+    }
   }
   return newlyApplied;
 }
