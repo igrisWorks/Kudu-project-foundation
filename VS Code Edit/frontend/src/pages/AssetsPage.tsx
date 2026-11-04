@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { ASSET_TYPES, type AssetCreateInput, type AssetDetail, type AssetRecord, type AssetStatus, type AssetType, type Page } from "@kudu/shared";
-import { ApiError, createAsset, getAsset, listAssets, updateAsset } from "../api";
+import { ApiError, createAsset, deleteAsset, getAsset, listAssets, updateAsset } from "../api";
 import { displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
 const PAGE_SIZE = 15;
@@ -32,6 +32,7 @@ function AssetListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const requestId = useRef(0);
+  const removalMessage = new URLSearchParams(window.location.search).get("removed");
   const load = useCallback(async () => {
     const current = ++requestId.current;
     setLoading(true); setError(""); setResult(null);
@@ -46,6 +47,11 @@ function AssetListPage() {
   const maxPage = Math.max(1, Math.ceil((result?.total ?? 0) / (result?.pageSize ?? PAGE_SIZE)));
   return <main className="page-main">
     <PageIntro eyebrow="REGISTRY / 01" title="Assets" description="Stable records for the equipment, systems, and hierarchy of your operation." action={<Link className="button button-primary" href="/assets/new" data-testid="button-create-asset"><span aria-hidden="true">＋</span> Register asset</Link>} />
+    {removalMessage && <div className="notice" role="status" data-testid="notice-asset-deleted">
+      Asset deleted. {Number(removalMessage) > 0
+        ? `${removalMessage} associated event${Number(removalMessage) === 1 ? "" : "s"} and original payloads remain preserved; their asset association was removed.`
+        : "No associated events were unlinked."}
+    </div>}
     <div className="toolbar">
       <div className="field field-search"><label htmlFor="asset-search">Search registry</label><input id="asset-search" data-testid="input-asset-search" value={search} onChange={event => { setSearch(event.target.value); setPage(1); }} placeholder="Search key or name…" /></div>
       <div className="field field-filter"><label htmlFor="asset-status">Record status</label><select id="asset-status" data-testid="filter-asset-status" value={status} onChange={event => { setStatus(event.target.value as typeof status); setPage(1); }}><option value="active">Active</option><option value="archived">Archived</option><option value="all">All records</option></select></div>
@@ -69,11 +75,14 @@ function AssetListPage() {
 
 function AssetDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
+  const [, setLocation] = useLocation();
   const [record, setRecord] = useState<AssetDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState("");
+  const [deleteError, setDeleteError] = useState("");
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try { setRecord(await getAsset(id)); } catch (cause) { setError(displayError(cause)); }
@@ -89,16 +98,38 @@ function AssetDetailPage() {
     } catch (cause) { setNotice(`Update failed: ${displayError(cause)}`); }
     finally { setSaving(false); }
   }
+  async function removeAsset() {
+    if (!record) return;
+    const confirmed = window.confirm(
+      `Delete ${record.name} (${record.assetKey})?\n\nAssociated events and their original payloads will be preserved, but will no longer be linked to this asset. Child assets prevent deletion; reassign them first.`,
+    );
+    if (!confirmed) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const result = await deleteAsset(id);
+      setLocation(`/assets?removed=${result.eventsUnassigned}`);
+    } catch (cause) {
+      setDeleteError(displayError(cause));
+    } finally {
+      setDeleting(false);
+    }
+  }
   if (loading) return <main className="page-main"><LoadingState label="Loading the actual asset record…" /></main>;
   if (error || !record) return <main className="page-main"><ErrorState title="Asset unavailable" message={error || "The requested asset was not returned by the API."} retry={() => void load()} back="/assets" /></main>;
   return <main className="page-main">
     <div className="detail-heading">
       <Link href="/assets" className="back-link" data-testid="link-back-assets">← All assets</Link>
       <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />ASSET RECORD</div><h1>{record.name}</h1><span className="detail-key" data-testid="text-asset-key">{record.assetKey}</span></div>
-        <div className="detail-actions"><Link className="button" href={`/assets/${encodeURIComponent(id)}/edit`} data-testid="button-edit-asset">Edit record</Link><button className={`button ${record.status === "archived" ? "button-primary" : "button-danger"}`} type="button" disabled={saving} onClick={() => void toggleArchived()} data-testid="button-toggle-asset-status">{saving ? "Saving…" : record.status === "archived" ? "Restore asset" : "Archive asset"}</button></div>
+        <div className="detail-actions">
+          <Link className="button" href={`/assets/${encodeURIComponent(id)}/edit`} data-testid="button-edit-asset">Edit record</Link>
+          <button className={`button ${record.status === "archived" ? "button-primary" : "button-danger"}`} type="button" disabled={saving} onClick={() => void toggleArchived()} data-testid="button-toggle-asset-status">{saving ? "Saving…" : record.status === "archived" ? "Restore asset" : "Archive asset"}</button>
+          <button className="button button-danger" type="button" disabled={deleting} onClick={() => void removeAsset()} data-testid="button-delete-asset">{deleting ? "Deleting…" : "Delete asset"}</button>
+        </div>
       </div>
     </div>
     {notice && <div className={`notice ${notice.startsWith("Update failed") ? "error" : ""}`} role="status" data-testid="status-asset-mutation">{notice}</div>}
+    {deleteError && <div className="notice error" role="alert" data-testid="error-delete-asset"><strong>Asset could not be deleted.</strong> {deleteError}</div>}
     <div className="detail-grid">
       <section className="panel"><h2 className="panel-title">Record details</h2><dl className="definition-list">
         <dt>Status</dt><dd><span className={`status-pill ${record.status === "active" ? "good" : "warn"}`}>{record.status.toUpperCase()}</span></dd>

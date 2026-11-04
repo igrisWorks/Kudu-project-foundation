@@ -72,7 +72,7 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
     db: manager.db, localMode: true, localDatabase: manager,
     importDirectory: imports, allowLoopbackRestTests: true, logLevel: "silent",
   });
-  const call = async (method: "GET" | "POST" | "PATCH", url: string, payload?: object, expected = method === "POST" ? 201 : 200) => {
+  const call = async (method: "GET" | "POST" | "PATCH" | "DELETE", url: string, payload?: object, expected = method === "POST" ? 201 : 200) => {
     const response = await app.inject({
       method, url, headers: { host: "localhost:3000", origin: "http://localhost:3000" },
       ...(payload ? { payload } : {}),
@@ -285,6 +285,29 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
     assert.equal((await call("GET", "/api/v1/events")).total, before.total + 6);
     assert.equal((await call("GET", "/api/v1/data-sources")).total, 8);
     assert.equal((await call("GET", "/api/v1/local/database")).engine, "SQLite");
+
+    const parentDeleteBlocked = await call("DELETE", `/api/v1/assets/${parent.id}`, undefined, 409);
+    assert.equal(parentDeleteBlocked.error.code, "ASSET_HAS_CHILDREN");
+    const linkedEvents = await manager.db.selectFrom("events").select("id").where("asset_id", "=", child.id).execute();
+    assert.ok(linkedEvents.length >= 1);
+    const childRemoval = await call("DELETE", `/api/v1/assets/${child.id}`);
+    assert.equal(childRemoval.outcome, "deleted");
+    assert.equal(childRemoval.eventsUnassigned, linkedEvents.length);
+    const preservedEvent = await call("GET", `/api/v1/events/${event.event.id}`);
+    assert.equal(preservedEvent.asset, null);
+    assert.deepEqual(preservedEvent.payload, { temperature: 24 });
+    assert.equal((await call("DELETE", `/api/v1/assets/${parent.id}`)).outcome, "deleted");
+
+    const sourceRemoval = await call("DELETE", `/api/v1/data-sources/${manual.id}`);
+    assert.equal(sourceRemoval.outcome, "archived");
+    assert.equal(sourceRemoval.preserved.events, 1);
+    assert.equal((await call("GET", `/api/v1/data-sources/${manual.id}`)).enabled, false);
+    assert.deepEqual((await call("GET", `/api/v1/events/${event.event.id}`)).payload, { temperature: 24 });
+    const emptySource = await call("POST", "/api/v1/data-sources", {
+      sourceKey: "unused", displayName: "Unused source", sourceType: "manual", configuration: { kind: "manual" },
+    });
+    assert.equal((await call("DELETE", `/api/v1/data-sources/${emptySource.id}`)).outcome, "deleted");
+    await call("GET", `/api/v1/data-sources/${emptySource.id}`, undefined, 404);
   } finally {
     await app.close();
     await manager.close();

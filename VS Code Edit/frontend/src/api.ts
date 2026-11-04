@@ -218,6 +218,10 @@ export function updateAsset(id: string, input: AssetUpdateInput): Promise<AssetD
   });
 }
 
+export function deleteAsset(id: string): Promise<{ outcome: "deleted"; eventsUnassigned: number }> {
+  return request(`/api/v1/assets/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export function listDataSources(
   query: ListQuery & { sourceType?: DataSourceType; enabled?: DataSourceEnabledFilter },
 ): Promise<Page<DataSourceRecord>> {
@@ -264,6 +268,13 @@ export function updateDataSource(
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+export function deleteDataSource(id: string): Promise<{
+  outcome: "deleted" | "archived";
+  preserved: { events: number; mappings: number; syncRuns: number };
+}> {
+  return request(`/api/v1/data-sources/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function importDataSourceFile(id: string): Promise<FileImportResult> {

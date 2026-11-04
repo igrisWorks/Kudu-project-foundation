@@ -56,6 +56,34 @@ test("health endpoint returns a safe degraded response when the database is down
   assert.equal(JSON.stringify(response.json()).includes("private connection details"), false);
 });
 
+test("Local database status reports actionable failure text without leaking internal errors", async context => {
+  const directory = await mkdtemp(join(tmpdir(), "kuduns-local-status-error-"));
+  const localDatabase = await LocalDatabaseManager.create(directory);
+  Object.defineProperty(localDatabase, "status", {
+    value: async () => { throw new Error("private /home/operator/KuduNS/kuduns.db failure detail"); },
+  });
+  const app = await createApp({
+    db: localDatabase.db,
+    localMode: true,
+    localDatabase,
+    logLevel: "silent",
+  });
+  context.after(async () => {
+    await app.close();
+    await localDatabase.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/v1/local/database",
+    headers: { host: "127.0.0.1:3000" },
+  });
+  assert.equal(response.statusCode, 503);
+  assert.match(response.json().error.message, /KuduNS data folder/);
+  assert.equal(JSON.stringify(response.json()).includes("private /home/operator"), false);
+});
+
 test("local edition session is authenticated without operator credentials and writes require local origin", async context => {
   const db = unusedDatabase();
   const directory = await mkdtemp(join(tmpdir(), "kuduns-local-origin-"));

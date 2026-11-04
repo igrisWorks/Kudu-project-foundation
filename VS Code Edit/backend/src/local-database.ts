@@ -118,7 +118,7 @@ export class LocalDatabaseManager {
       dataDirectory: dirname(this.handle.filePath),
       backupsDirectory: this.handle.backupsDirectory,
       sqliteVersion: sqliteVersion.version,
-      schemaVersion: latestMigration?.name ?? "none",
+      schemaVersion: latestMigration?.name.match(/^(\d{4})_/)?.[1] ?? "none",
       migrationState: "current",
       integrity: "ok",
       lastSuccessfulInitialization: this.initializedAt,

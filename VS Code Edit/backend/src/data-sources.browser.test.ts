@@ -235,6 +235,10 @@ test(
     await setValue("#rest-request-interval", "0");
     const sourceEnabled = await evaluate("Boolean(document.querySelector('[data-testid=\"checkbox-source-enabled\"]')?.checked)");
     if (!sourceEnabled) await click('[data-testid="checkbox-source-enabled"]');
+    await click('[data-testid="button-submit-data-source"]');
+    await waitFor("saved source next step", "Boolean(document.querySelector('[data-testid=\"button-discover-data\"]'))");
+    await click('[data-testid="button-discover-data"]');
+    await waitFor("saved source discovery screen", "Boolean(document.querySelector('[data-testid=\"section-discover-data\"]'))");
     await click('[data-testid="button-discover-source"]');
     await waitFor("discovery fields", "Boolean(document.querySelector('[data-testid=\"select-discovery-map-eventType\"]'))");
     const sampleSummary = await evaluate("document.querySelector('[data-testid=\"list-discovery-preview-records\"]')?.innerText ?? ''");
@@ -272,6 +276,10 @@ test(
     await setValue('[data-testid="input-source-display-name"]', "Browser JSON Reuse");
     await setValue('[data-testid="select-data-source-type"]', "json_file");
     await setValue('[data-testid="input-source-relative-path"]', "reuse.json");
+    await click('[data-testid="button-submit-data-source"]');
+    await waitFor("saved JSON source next step", "Boolean(document.querySelector('[data-testid=\"button-discover-data\"]'))");
+    await click('[data-testid="button-discover-data"]');
+    await waitFor("saved JSON discovery screen", "Boolean(document.querySelector('[data-testid=\"section-discover-data\"]'))");
     await click('[data-testid="button-discover-source"]');
     await waitFor("JSON discovery", "Boolean(document.querySelector('[data-testid=\"select-discovery-map-eventType\"]'))");
     await waitFor(
@@ -308,5 +316,52 @@ test(
       .executeTakeFirst();
     assert.equal(reusedMapping?.status, "draft", "reusing an approved mapping must not auto-activate it");
     assert.ok(JSON.stringify(reusedMapping?.definition).includes("sourceRecordId"));
+
+    const sourceId = await evaluate("window.location.pathname.split('/').filter(Boolean).at(-1) ?? ''");
+    const sourceRecord = await manager.db.selectFrom("data_sources").select("id").where("id", "=", sourceId).executeTakeFirst();
+    assert.ok(sourceRecord);
+    const assetResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/assets",
+      headers: { host: `127.0.0.1:${appPort}`, origin: `http://127.0.0.1:${appPort}` },
+      payload: { assetKey: "browser-delete-asset", name: "Browser delete asset", assetType: "machine" },
+    });
+    assert.equal(assetResponse.statusCode, 201, assetResponse.body);
+    const asset = assetResponse.json();
+    const eventResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/events",
+      headers: { host: `127.0.0.1:${appPort}`, origin: `http://127.0.0.1:${appPort}` },
+      payload: {
+        sourceId,
+        assetId: asset.id,
+        eventType: "browser_delete_test",
+        occurredAt: "2026-11-04T12:00:00Z",
+        payload: { original: "preserve-me" },
+      },
+    });
+    assert.equal(eventResponse.statusCode, 201, eventResponse.body);
+    const eventId = eventResponse.json().event.id;
+    await evaluate("window.location.href = " + JSON.stringify(`/assets/${asset.id}`) + "; true");
+    await waitFor("asset detail deletion control", "Boolean(document.querySelector('[data-testid=\"button-delete-asset\"]'))");
+    await evaluate("window.confirm = () => true");
+    await click('[data-testid="button-delete-asset"]');
+    await waitFor("asset deletion success", "Boolean(document.querySelector('[data-testid=\"notice-asset-deleted\"]'))");
+    const preservedAfterAssetDelete = await manager.db.selectFrom("events").select(["asset_id", "payload"]).where("id", "=", eventId).executeTakeFirst();
+    assert.equal(preservedAfterAssetDelete?.asset_id, null);
+    assert.deepEqual(preservedAfterAssetDelete?.payload, { original: "preserve-me" });
+
+    const syncHistoryBeforeRemoval = await manager.db.selectFrom("data_source_sync_runs").select("id").where("source_id", "=", templateSourceId).execute();
+    const sourceEventsBeforeRemoval = await manager.db.selectFrom("events").select("id").where("source_id", "=", templateSourceId).execute();
+    assert.ok(syncHistoryBeforeRemoval.length > 0 && sourceEventsBeforeRemoval.length > 0);
+    await evaluate("window.location.href = " + JSON.stringify(`/data-sources/${templateSourceId}`) + "; true");
+    await waitFor("REST source removal control", "Boolean(document.querySelector('[data-testid=\"button-delete-data-source\"]'))");
+    await evaluate("window.confirm = () => true");
+    await click('[data-testid="button-delete-data-source"]');
+    await waitFor("source archived with history retained", "Boolean(document.querySelector('[data-testid=\"notice-source-archived\"]'))");
+    const retainedSource = await manager.db.selectFrom("data_sources").select("enabled").where("id", "=", templateSourceId).executeTakeFirst();
+    const retainedEvents = await manager.db.selectFrom("events").select("id").where("source_id", "=", templateSourceId).execute();
+    assert.equal(retainedSource?.enabled, false);
+    assert.equal(retainedEvents.length, sourceEventsBeforeRemoval.length);
   },
 );

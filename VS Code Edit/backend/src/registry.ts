@@ -509,6 +509,44 @@ export function registerRegistryRoutes(app: FastifyInstance, db: Kysely<Database
     return getAssetDetail(db, id);
   });
 
+  app.delete<{ Params: { id: string } }>("/api/v1/assets/:id", async (request) => {
+    const id = validateUuidParameter(request.params.id, "asset");
+    return db.transaction().execute(async (transaction) => {
+      if (isSqliteDatabase(transaction)) await lockSqliteWrite(transaction);
+      else await sql`SELECT pg_advisory_xact_lock(7224, 2)`.execute(transaction);
+
+      const assetQuery = () => transaction
+        .selectFrom("assets")
+        .select("id")
+        .where("id", "=", id);
+      const asset = isSqliteDatabase(transaction)
+        ? await assetQuery().executeTakeFirst()
+        : await assetQuery().forUpdate().executeTakeFirst();
+      if (!asset) throw new ApiFailure(404, "NOT_FOUND", "Asset not found.");
+
+      const childCount = await transaction
+        .selectFrom("assets")
+        .select((eb) => eb.fn.countAll<number>().as("total"))
+        .where("parent_asset_id", "=", id)
+        .executeTakeFirstOrThrow();
+      if (Number(childCount.total) > 0) {
+        throw new ApiFailure(
+          409,
+          "ASSET_HAS_CHILDREN",
+          "This asset has child assets. Reassign or remove those child references before deleting it.",
+        );
+      }
+
+      const eventCount = await transaction
+        .selectFrom("events")
+        .select((eb) => eb.fn.countAll<number>().as("total"))
+        .where("asset_id", "=", id)
+        .executeTakeFirstOrThrow();
+      await transaction.deleteFrom("assets").where("id", "=", id).execute();
+      return { outcome: "deleted" as const, eventsUnassigned: Number(eventCount.total) };
+    });
+  });
+
   app.get("/api/v1/data-sources", async (request) => listDataSources(db, request.query));
 
   app.post("/api/v1/data-sources", async (request, reply) => {
@@ -577,6 +615,48 @@ export function registerRegistryRoutes(app: FastifyInstance, db: Kysely<Database
 
     await db.updateTable("data_sources").set(update).where("id", "=", id).execute();
     return getDataSourceDetail(db, id);
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/v1/data-sources/:id", async (request) => {
+    const id = validateUuidParameter(request.params.id, "data source");
+    return db.transaction().execute(async (transaction) => {
+      if (isSqliteDatabase(transaction)) await lockSqliteWrite(transaction);
+      else await sql`SELECT pg_advisory_xact_lock(7224, 1)`.execute(transaction);
+
+      const sourceQuery = () => transaction
+        .selectFrom("data_sources")
+        .select("id")
+        .where("id", "=", id);
+      const source = isSqliteDatabase(transaction)
+        ? await sourceQuery().executeTakeFirst()
+        : await sourceQuery().forUpdate().executeTakeFirst();
+      if (!source) throw new ApiFailure(404, "NOT_FOUND", "Data source not found.");
+
+      const [events, mappings, syncRuns] = await Promise.all([
+        transaction.selectFrom("events").select((eb) => eb.fn.countAll<number>().as("total"))
+          .where("source_id", "=", id).executeTakeFirstOrThrow(),
+        transaction.selectFrom("data_source_event_mappings").select((eb) => eb.fn.countAll<number>().as("total"))
+          .where("source_id", "=", id).executeTakeFirstOrThrow(),
+        transaction.selectFrom("data_source_sync_runs").select((eb) => eb.fn.countAll<number>().as("total"))
+          .where("source_id", "=", id).executeTakeFirstOrThrow(),
+      ]);
+      const preserved = {
+        events: Number(events.total),
+        mappings: Number(mappings.total),
+        syncRuns: Number(syncRuns.total),
+      };
+      const hasHistory = Object.values(preserved).some((count) => count > 0);
+      if (hasHistory) {
+        await transaction.updateTable("data_sources")
+          .set({ enabled: false, updated_at: new Date() })
+          .where("id", "=", id)
+          .execute();
+        return { outcome: "archived" as const, preserved };
+      }
+
+      await transaction.deleteFrom("data_sources").where("id", "=", id).execute();
+      return { outcome: "deleted" as const, preserved };
+    });
   });
 }
 

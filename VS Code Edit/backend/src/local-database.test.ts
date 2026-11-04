@@ -29,6 +29,7 @@ test("Local SQLite initializes, preserves typed values, backs up, restores and s
     assert.deepEqual(source.configuration, { kind: "manual" });
     assert.ok(source.created_at instanceof Date);
     assert.equal((await manager.status()).integrity, "ok");
+    assert.equal((await manager.status()).schemaVersion, "0002");
     const backup = await manager.createBackup();
     await manager.db.updateTable("data_sources").set({ display_name: "Changed", enabled: false }).execute();
     assert.equal((await manager.db.selectFrom("data_sources").select("enabled").executeTakeFirstOrThrow()).enabled, false);

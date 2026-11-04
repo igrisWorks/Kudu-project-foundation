@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceDiscoveryResult, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page, type RestApiAuthMode, type RestPaginationConfiguration, type RestSyncResult, type SuggestedTargetField } from "@kudu/shared";
-import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, discoverDataSource, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, listRestSyncRuns, resumeRestSyncRun, syncRestDataSource, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
+import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, deleteDataSource, discoverDataSource, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, listRestSyncRuns, resumeRestSyncRun, syncRestDataSource, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
 import { ConnectorBadge, displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
 const PAGE_SIZE = 15;
@@ -43,6 +43,7 @@ function DataSourceListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const requestId = useRef(0);
+  const removalOutcome = new URLSearchParams(window.location.search).get("removed");
   const load = useCallback(async () => {
     const current = ++requestId.current;
     setLoading(true); setError(""); setResult(null);
@@ -57,6 +58,8 @@ function DataSourceListPage() {
   const maxPage = Math.max(1, Math.ceil((result?.total ?? 0) / (result?.pageSize ?? PAGE_SIZE)));
   return <main className="page-main">
     <PageIntro eyebrow="REGISTRY / 02" title="Data sources" description="Describe where operational information lives. Registration and enablement do not connect, ingest, or generate outbound traffic." action={<Link className="button button-primary" href="/data-sources/new" data-testid="button-create-data-source"><span aria-hidden="true">＋</span> Add data source</Link>} />
+    {removalOutcome === "archived" && <div className="notice" role="status" data-testid="notice-source-archived">The connection was disabled. Imported events, original payloads, mappings, and sync history remain available.</div>}
+    {removalOutcome === "deleted" && <div className="notice" role="status" data-testid="notice-source-deleted">The source record was removed because it had no linked events, mappings, or sync history.</div>}
     <div className="notice" data-testid="notice-connector-status"><strong>Source actions are on demand.</strong> REST sync and local CSV/JSON imports run only when requested. Registration and enablement never start polling or ingestion.</div>
     <div className="toolbar">
       <div className="field field-search"><label htmlFor="source-search">Search registry</label><input id="source-search" data-testid="input-data-source-search" value={search} onChange={event => { setSearch(event.target.value); setPage(1); }} placeholder="Search key or display name…" /></div>
@@ -66,9 +69,9 @@ function DataSourceListPage() {
     {error && <div className="notice error" role="alert" data-testid="error-data-sources"><strong>Could not load data sources.</strong> {error} <button type="button" className="button button-quiet" onClick={() => void load()} data-testid="button-retry-data-sources">Retry</button></div>}
     {loading ? <LoadingState label="Loading registered source metadata…" /> : error ? null : result?.items.length ? <>
       <div className="table-frame"><table>
-        <thead><tr><th>KEY / DISPLAY NAME</th><th>TYPE</th><th>ENABLED</th><th>CONNECTOR STATUS</th><th>LAST SUCCESSFUL SYNC</th></tr></thead>
+        <thead><tr><th>SOURCE</th><th>TYPE</th><th>ENABLED</th><th>CONNECTOR STATUS</th><th>LAST SUCCESSFUL SYNC</th></tr></thead>
         <tbody>{result.items.map(source => <tr key={source.id} data-testid={`row-data-source-${source.id}`}>
-          <td><Link className="record-link mono" href={`/data-sources/${encodeURIComponent(source.id)}`} data-testid={`link-data-source-${source.id}`}>{source.sourceKey}</Link><br /><Link className="record-link" href={`/data-sources/${encodeURIComponent(source.id)}`} data-testid={`link-data-source-name-${source.id}`}>{source.displayName}</Link></td>
+          <td><Link className="record-link" href={`/data-sources/${encodeURIComponent(source.id)}`} data-testid={`link-data-source-name-${source.id}`}>{source.displayName}</Link><br /><span className="field-hint mono" data-testid={`text-data-source-key-${source.id}`}>{source.sourceKey}</span></td>
           <td>{sourceLabels[source.sourceType]}</td><td><span className={`status-pill ${source.enabled ? "good" : ""}`}>{source.enabled ? "ENABLED" : "DISABLED"}</span></td>
           <td>{source.sourceType === "rest_api" ? <span className="status-pill good">ON-DEMAND</span> : <ConnectorBadge status={source.connectionStatus} />}</td>
           <td className="time-label">{formatDate(source.lastSuccessfulSyncAt)}</td>
@@ -81,6 +84,7 @@ function DataSourceListPage() {
 
 function DataSourceDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
+  const [, navigate] = useLocation();
   const detailSearch = new URLSearchParams(window.location.search);
   const requestedNamespaceAssetId = detailSearch.get("namespaceAssetId");
   const suggestedMappingStatus = detailSearch.get("suggestedMapping");
@@ -102,6 +106,8 @@ function DataSourceDetailPage() {
   const [syncResult, setSyncResult] = useState<RestSyncResult | null>(null);
   const [syncRuns, setSyncRuns] = useState<RestSyncResult[]>([]);
   const [syncHistoryError, setSyncHistoryError] = useState("");
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState("");
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -146,6 +152,22 @@ function DataSourceDetailPage() {
     } catch (cause) { setSyncError(displayError(cause)); }
     finally { setSyncing(false); }
   }
+  async function removeSource() {
+    const confirmed = window.confirm(
+      "Remove this data source?\n\nIf it has imported events, mappings, or sync history, KuduNS will disable the connection and retain that history, payloads, and provenance. Only a source with no linked history is permanently deleted.",
+    );
+    if (!confirmed) return;
+    setRemoving(true);
+    setRemoveError("");
+    try {
+      const result = await deleteDataSource(id);
+      navigate(`/data-sources?removed=${result.outcome}`);
+    } catch (cause) {
+      setRemoveError(displayError(cause));
+    } finally {
+      setRemoving(false);
+    }
+  }
   if (loading) return <main className="page-main"><LoadingState label="Loading the actual data source record…" /></main>;
   if (error || !record) return <main className="page-main"><ErrorState title="Data source unavailable" message={error || "The requested source was not returned by the API."} retry={() => void load()} back={returnHref} /></main>;
   const cfg = record.configuration;
@@ -155,12 +177,31 @@ function DataSourceDetailPage() {
     <div className="detail-heading"><Link href={returnHref} className="back-link" data-testid="link-back-data-sources">{returnLabel}</Link>
       <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />DATA SOURCE RECORD</div><h1>{record.displayName}</h1><span className="detail-key" data-testid="text-data-source-key">{record.sourceKey}</span></div>
         <div className="detail-actions">
+          {(fileFormat || isRestSource) && <Link
+            className="button"
+            href={`/data-sources/${encodeURIComponent(id)}/edit?step=discover#discover-data`}
+            data-testid="button-discover-data"
+          >Discover data</Link>}
           {fileFormat && record.enabled && <button className="button button-primary" type="button" onClick={() => void runFileImport()} disabled={importing} data-testid="button-import-source-file">{importing ? "Importing…" : `Import configured ${fileFormat} file`}</button>}
           {isRestSource && record.enabled && <button className="button button-primary" type="button" onClick={() => void runRestSync()} disabled={syncing} data-testid="button-sync-rest-source">{syncing ? "Syncing…" : "Sync now"}</button>}
           <Link className="button" href={`/data-sources/${encodeURIComponent(id)}/edit`} data-testid="button-edit-data-source">Edit record</Link>
+          <button className="button button-danger" type="button" onClick={() => void removeSource()} disabled={removing} data-testid="button-delete-data-source">{removing ? "Removing…" : "Delete data source"}</button>
         </div>
       </div>
     </div>
+    {(fileFormat || isRestSource) && <section className="panel source-workflow" data-testid="panel-data-source-workflow">
+      <div className="panel-heading-row">
+        <div><p className="section-label">NEXT STEPS</p><h2 className="panel-title">Discover and prepare this source</h2></div>
+        <span className={`status-pill ${record.enabled ? "good" : "warn"}`}>{record.enabled ? "CONNECTION SAVED" : "DISABLED"}</span>
+      </div>
+      <ol className="source-workflow-steps">
+        <li><strong>Connection saved</strong><span>Configuration is stored. Saving did not contact the source.</span></li>
+        <li><strong>Discover and review fields</strong><span>Choose the collection, inspect recognition suggestions, and exclude irrelevant fields.</span></li>
+        <li><strong>Validate and activate mapping</strong><span>Only an approved, activated mapping is used for mapped imports and REST sync.</span></li>
+        <li><strong>Import or sync</strong><span>Ingestion starts only when you choose the action above.</span></li>
+      </ol>
+      <p className="field-hint">Discovery is an explicit, bounded request. It does not import records, create assets, or activate a mapping.</p>
+    </section>}
     <div className="notice" data-testid="notice-source-import">
       {fileFormat
         ? <><strong>{fileFormat} file import is available.</strong> Imports read the registered relative file from the configured local import directory. {record.enabled ? "Imports run only when requested and are not scheduled." : "Enable this source before importing. No import is started while disabled."}</>
@@ -179,6 +220,7 @@ function DataSourceDetailPage() {
     </div>}
     {importError && <div className="notice error" role="alert" data-testid="error-file-import"><strong>Import failed.</strong> {importError}</div>}
     {syncError && <div className="notice error" role="alert" data-testid="error-rest-sync"><strong>Sync could not run.</strong> {syncError}</div>}
+    {removeError && <div className="notice error" role="alert" data-testid="error-delete-data-source"><strong>Source could not be removed.</strong> {removeError}</div>}
     {importResult && <section className="panel file-import-result" data-testid="panel-file-import-result">
       <h2 className="panel-title">Import result · {importResult.format.toUpperCase()}</h2>
       <p data-testid="text-file-import-counts">
@@ -687,6 +729,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   const [mappingTemplateSourceId, setMappingTemplateSourceId] = useState("");
   const [mappingTemplateBusy, setMappingTemplateBusy] = useState(false);
   const [mappingTemplateMessage, setMappingTemplateMessage] = useState("");
+  const focusDiscovery = editing && new URLSearchParams(window.location.search).get("step") === "discover";
   function clearDiscovery() {
     setDiscovery(null);
     setSelectedRecordPath("");
@@ -906,6 +949,13 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
     }).catch(cause => { if (active) setLoadError(displayError(cause)); }).finally(() => { if (active) setInitialLoading(false); });
     return () => { active = false; };
   }, [editing, id, loadAttempt]);
+  useEffect(() => {
+    if (!focusDiscovery || initialLoading) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("discover-data")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusDiscovery, initialLoading]);
   function validate() {
     const errors: Record<string, string> = {};
     if (!sourceKey.trim()) errors.sourceKey = "Source key is required.";
@@ -1018,7 +1068,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
     <div className="detail-heading"><Link href={editing ? `/data-sources/${encodeURIComponent(id)}` : "/data-sources"} className="back-link" data-testid="link-cancel-data-source">← {editing ? "Data source record" : "All data sources"}</Link>
       <PageIntro eyebrow={editing ? "REGISTRY / SOURCE / EDIT" : "REGISTRY / SOURCE / NEW"} title={editing ? "Edit data source" : "Register data source"} description="Record configuration metadata. This workflow does not establish a connection or start ingestion." />
     </div>
-    <div className="notice"><strong>Actions are on demand.</strong> Saving or enabling a source does not contact it. REST requests occur only after you select Discover &amp; Preview or Sync now; local files are read only after an explicit discovery or import action.</div>
+    <div className="notice"><strong>Actions are on demand.</strong> Saving or enabling a source does not contact it. After saving, choose Discover data to inspect a REST endpoint or local file. Import and sync are separate operator actions.</div>
     {error && <div className="notice error" role="alert" data-testid="error-data-source-submit">{error}</div>}
     {validation && <div className="notice error" role="status" data-testid="validation-data-source">{validation}</div>}
     <section className="form-layout"><form className="form-panel" onSubmit={submit} noValidate>
@@ -1142,11 +1192,11 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         {type === "json_file" && <><label htmlFor="json-records-path">JSON records path</label><input id="json-records-path" data-testid="input-json-records-path" value={recordsPath} onChange={event => changeConfiguration(setRecordsPath, event.target.value)} placeholder="faults" /><span className="field-hint">Dot path to the record array; leave blank for a top-level array.</span></>}
       </div>}
       {type === "manual" && <div className="notice" data-testid="notice-manual-source">Manual source is a reference record. No external connection or ingestion is available.</div>}
-      {type !== "manual" && <>
-        <div className="form-section"><h2>Discover and review</h2><p>Discovery makes one bounded REST GET or up to three pages using the configured pagination, or reads the selected local file. It does not import, create assets, or activate a mapping.</p></div>
+      {editing && type !== "manual" && <>
+        <div className="form-section" id="discover-data" data-testid="section-discover-data"><h2>Discover data</h2><p>Discovery makes one bounded REST GET or up to three pages using the configured pagination, or reads the selected local file. It does not import, create assets, or activate a mapping.</p></div>
         {discoveryError && <div className="notice error" role="alert" data-testid="error-data-discovery">{discoveryError}</div>}
         <div className="form-actions"><button className="button" type="button" onClick={() => void runDiscovery()} disabled={busy || discoveryBusy} data-testid="button-discover-source">
-          {discoveryBusy ? "Discovering…" : "Discover structure & preview"}
+          {discoveryBusy ? "Discovering…" : "Discover data"}
         </button></div>
         {discovery && <DiscoveryReview
           result={discovery}

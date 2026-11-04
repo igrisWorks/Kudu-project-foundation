@@ -34,7 +34,7 @@ test(
       const table = await pool.query<{ table_name: string | null }>(
         "SELECT to_regclass('kudu.data_source_sync_runs')::text AS table_name",
       );
-      assert.equal(table.rows[0]?.table_name, "data_source_sync_runs");
+      assert.equal(table.rows[0]?.table_name, "kudu.data_source_sync_runs");
     } finally {
       await pool.end();
     }
@@ -54,6 +54,14 @@ test(
     const app = await createAuthenticatedTestApp({ db, logLevel: "silent" });
 
     context.after(async () => {
+      const testSource = await db
+        .selectFrom("data_sources")
+        .select("id")
+        .where("source_key", "=", `${prefix}-source`)
+        .executeTakeFirst();
+      if (testSource) {
+        await db.deleteFrom("events").where("source_id", "=", testSource.id).execute();
+      }
       await db
         .deleteFrom("assets")
         .where("asset_key", "=", `${prefix}-child`)
@@ -317,5 +325,45 @@ test(
       },
     });
     assert.equal(unsafePathResponse.statusCode, 400);
+
+    const historicalEventResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/events",
+      payload: {
+        sourceId: source.id,
+        assetId: child.id,
+        eventType: "machine_fault",
+        occurredAt: "2026-11-04T10:00:00Z",
+        payload: { faultCode: "F-17", originalText: "Motor overload" },
+      },
+    });
+    assert.equal(historicalEventResponse.statusCode, 201, historicalEventResponse.body);
+    const historicalEvent = historicalEventResponse.json().event;
+
+    const removeSourceResponse = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/data-sources/${source.id}`,
+    });
+    assert.equal(removeSourceResponse.statusCode, 200, removeSourceResponse.body);
+    assert.equal(removeSourceResponse.json().outcome, "archived");
+    assert.equal(removeSourceResponse.json().preserved.events, 1);
+    assert.equal((await app.inject({ method: "GET", url: `/api/v1/data-sources/${source.id}` })).json().enabled, false);
+    assert.deepEqual((await app.inject({ method: "GET", url: `/api/v1/events/${historicalEvent.id}` })).json().payload, {
+      faultCode: "F-17",
+      originalText: "Motor overload",
+    });
+
+    const deleteChildResponse = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/assets/${child.id}`,
+    });
+    assert.equal(deleteChildResponse.statusCode, 200, deleteChildResponse.body);
+    assert.equal(deleteChildResponse.json().eventsUnassigned, 1);
+    const unlinkedEvent = await app.inject({ method: "GET", url: `/api/v1/events/${historicalEvent.id}` });
+    assert.equal(unlinkedEvent.statusCode, 200);
+    assert.equal(unlinkedEvent.json().asset, null);
+    assert.deepEqual(unlinkedEvent.json().payload, { faultCode: "F-17", originalText: "Motor overload" });
+    const deleteParentResponse = await app.inject({ method: "DELETE", url: `/api/v1/assets/${parent.id}` });
+    assert.equal(deleteParentResponse.statusCode, 200, deleteParentResponse.body);
   },
 );

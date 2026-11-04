@@ -15,14 +15,22 @@ export default function SettingsPage({ dockerMode = false }: { dockerMode?: bool
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [databaseError, setDatabaseError] = useState("");
   const [message, setMessage] = useState("");
   const refresh = useCallback(async () => {
+    setDatabaseError("");
+    setDatabase(null);
     try {
-      const [status, saved] = await Promise.all([getLocalDatabase(), listLocalDatabaseBackups()]);
-      setDatabase(status);
-      setBackups(saved.items);
+      setDatabase(await getLocalDatabase());
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Local database status is unavailable.");
+      setDatabaseError(cause instanceof Error
+        ? cause.message
+        : "SQLite status is unavailable. Check the KuduNS data folder and run Check status again.");
+    }
+    try {
+      setBackups((await listLocalDatabaseBackups()).items);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The local backup list is unavailable.");
     }
   }, []);
   useEffect(() => {
@@ -69,19 +77,20 @@ export default function SettingsPage({ dockerMode = false }: { dockerMode?: bool
         <p className="field-hint">Upgrading from PostgreSQL Local? Existing PostgreSQL data has not been imported or deleted. Stop Local and use the explicit <code>pnpm local:import-postgres</code> migration described in <code>docs/LOCAL-SQLITE.md</code> before relying on this database.</p>
       </div>
     </div>
+    {databaseError && <p className="error-note" role="alert" data-testid="error-local-database-status">{databaseError}</p>}
     {error && <p className="error-note" role="alert">{error}</p>}
     {message && <p className="settings-security-note" role="status">{message}</p>}
     <section className="panel settings-panel" aria-labelledby="database-settings-heading">
       <div className="panel-heading">
         <div><p className="section-label">EMBEDDED STORAGE</p><h2 id="database-settings-heading">SQLite database</h2></div>
-        <span className={`status-pill ${database?.connected ? "good" : "bad"}`} role="status">
-          {database ? "Ready" : "Checking"}
+        <span className={`status-pill ${database?.connected ? "good" : databaseError ? "bad" : ""}`} role="status" data-testid="status-local-database">
+          {database?.connected ? "Healthy" : databaseError ? "Needs attention" : "Checking"}
         </span>
       </div>
       <dl className="settings-status-grid">
         <div><dt>Database file</dt><dd><code>{database?.filePath ?? "Checking…"}</code></dd></div>
         <div><dt>SQLite version</dt><dd>{database?.sqliteVersion ?? "—"}</dd></div>
-        <div><dt>Schema version</dt><dd>{database?.schemaVersion ?? "—"}</dd></div>
+        <div><dt>Application schema version</dt><dd>{database?.schemaVersion === "none" ? "Not initialized" : database?.schemaVersion ? `v${database.schemaVersion}` : "—"}</dd></div>
         <div><dt>Migrations</dt><dd>{database?.migrationState ?? "Checking…"}</dd></div>
         <div><dt>Integrity</dt><dd>{database?.integrity ?? "Checking…"}</dd></div>
         <div><dt>Last successful initialization</dt><dd>{database?.lastSuccessfulInitialization ?? "—"}</dd></div>

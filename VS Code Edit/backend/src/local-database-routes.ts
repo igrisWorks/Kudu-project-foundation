@@ -10,7 +10,18 @@ function failure(
 }
 
 export function registerLocalDatabaseRoutes(app: FastifyInstance, manager: LocalDatabaseManager): void {
-  app.get("/api/v1/local/database", async () => manager.status());
+  app.get("/api/v1/local/database", async (_request, reply) => {
+    try {
+      return await manager.status();
+    } catch (error) {
+      app.log.error({ err: error }, "Local database status check failed");
+      return failure(
+        reply,
+        503,
+        "SQLite needs attention. Check that the KuduNS data folder is accessible, then run Check status again. Preserve or create a backup before attempting a restore.",
+      );
+    }
+  });
   app.get("/api/v1/local/database/backups", async () => ({ items: await manager.listBackups() }));
 
   app.post("/api/v1/local/database/backups", async (_request, reply) => {

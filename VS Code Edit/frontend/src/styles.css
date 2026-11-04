@@ -66,6 +66,10 @@ a { color: inherit; }
 .button-quiet { border-color: transparent; background: transparent; }
 .button-danger { color: var(--danger); border-color: #e5c9c6; background: #fff; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.source-workflow-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 18px 0 12px; padding-left: 22px; }
+.source-workflow-steps li { padding: 0 8px 0 2px; }
+.source-workflow-steps li strong, .source-workflow-steps li span { display: block; }
+.source-workflow-steps li span { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 13px; margin: 0 0 15px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .field { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .field label, .field-label { color: #43536a; font-size: 11px; font-weight: 600; }
@@ -316,6 +320,7 @@ tbody tr:hover { background: #f8fafc; }
   .event-time-hint, .event-filter-actions { grid-column: 1 / -1; }
   .namespace-layout { grid-template-columns: minmax(0, 1fr); }
   .settings-form .form-actions { align-items: flex-start; flex-direction: column; }
+  .source-workflow-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 680px) {
   .app-shell { display: flex; flex-direction: column; }
@@ -354,6 +359,7 @@ tbody tr:hover { background: #f8fafc; }
   .namespace-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .namespace-search { grid-column: 1 / -1; }
   .settings-state { align-items: flex-start; flex-direction: column; }
+  .source-workflow-steps { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .workspace-content { padding: 0 13px; }
