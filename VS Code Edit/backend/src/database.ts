@@ -23,6 +23,7 @@ export type StoredSourceConfiguration =
       method?: "GET";
       authMode?: "none" | "bearer";
       credentialRef?: string;
+      trustedPrivateHost?: string;
       timeoutMs?: number;
       maxResponseBytes?: number;
       maxRecords?: number;

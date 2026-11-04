@@ -153,8 +153,9 @@ function DataSourceDetailPage() {
     finally { setSyncing(false); }
   }
   async function removeSource() {
+    if (!record) return;
     const confirmed = window.confirm(
-      "Remove this data source?\n\nIf it has imported events, mappings, or sync history, KuduNS will disable the connection and retain that history, payloads, and provenance. Only a source with no linked history is permanently deleted.",
+      `Remove "${record.displayName}" (${record.sourceKey})?\n\nIf it has imported events, mappings, or sync history, KuduNS will disable the connection and retain that history, payloads, and provenance. Only a source with no linked history is permanently deleted.`,
     );
     if (!confirmed) return;
     setRemoving(true);
@@ -288,6 +289,9 @@ function DataSourceDetailPage() {
           <dt>Configuration type</dt><dd>{sourceLabels[cfg.kind]}</dd>
           {cfg.kind === "rest_api" && <>
             <dt>Base URL</dt><dd className="mono" data-testid="text-source-base-url">{cfg.baseUrl}</dd>
+            <dt>Private-network trust</dt><dd data-testid="text-source-trusted-private-host">{cfg.trustedPrivateHost
+              ? `Trusted exact host: ${cfg.trustedPrivateHost}`
+              : "No private-network host trust configured"}</dd>
             <dt>Endpoint path</dt><dd className="mono">{cfg.endpointPath || "Not configured"}</dd>
             <dt>Method</dt><dd>{cfg.method ?? "GET"}</dd>
             <dt>Response format</dt><dd>{(cfg.responseFormat ?? "json").toUpperCase()}</dd>
@@ -704,6 +708,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   const [baseUrl, setBaseUrl] = useState(""); const [relativePath, setRelativePath] = useState("");
   const [endpointPath, setEndpointPath] = useState(""); const [recordsPath, setRecordsPath] = useState("");
   const [authMode, setAuthMode] = useState<RestApiAuthMode>("none");
+  const [trustPrivateHost, setTrustPrivateHost] = useState(false);
   const [timeoutMs, setTimeoutMs] = useState("10000"); const [maxResponseBytes, setMaxResponseBytes] = useState("1048576"); const [maxRecords, setMaxRecords] = useState("500");
   const [paginationMode, setPaginationMode] = useState<PaginationMode>("");
   const [pageSize, setPageSize] = useState("100"); const [limitParameter, setLimitParameter] = useState("limit");
@@ -742,6 +747,27 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   function changeConfiguration(setter: (value: string) => void, value: string) {
     setter(value);
     clearDiscovery();
+  }
+  function hostnameFromUrl(value: string): string {
+    try {
+      return new URL(value).hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+    } catch {
+      return "";
+    }
+  }
+  function isLoopbackHostname(hostname: string): boolean {
+    return hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname === "::1" ||
+      /^127(?:\.\d{1,3}){3}$/.test(hostname) ||
+      /^::ffff:127(?:\.\d{1,3}){3}$/i.test(hostname);
+  }
+  const restHostname = hostnameFromUrl(baseUrl);
+  function changeBaseUrl(value: string) {
+    if (trustPrivateHost && hostnameFromUrl(value) !== restHostname) {
+      setTrustPrivateHost(false);
+    }
+    changeConfiguration(setBaseUrl, value);
   }
   function configurationFromForm(): DataSourceConfigurationInput {
     if (type === "rest_api") {
@@ -782,6 +808,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         endpointPath: endpointPath.trim(),
         method: "GET",
         authMode,
+        ...(trustPrivateHost && restHostname ? { trustedPrivateHost: restHostname } : {}),
         timeoutMs: Number(timeoutMs),
         maxResponseBytes: Number(maxResponseBytes),
         maxRecords: Number(maxRecords),
@@ -919,6 +946,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         setEndpointPath(record.configuration.endpointPath ?? "");
         setRecordsPath(record.configuration.recordsPath ?? "");
         setAuthMode(record.configuration.authMode ?? "none");
+        setTrustPrivateHost(Boolean(record.configuration.trustedPrivateHost));
         setTimeoutMs(String(record.configuration.timeoutMs ?? 10000));
         setMaxResponseBytes(String(record.configuration.maxResponseBytes ?? 1048576));
         setMaxRecords(String(record.configuration.maxRecords ?? 500));
@@ -1075,7 +1103,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       <div className="form-grid">
         <Field label="Source key" name="source-key" value={sourceKey} onChange={setSourceKey} required hint="A stable identifier for this source." error={fieldErrors.sourceKey} />
         <Field label="Display name" name="source-display-name" value={displayName} onChange={setDisplayName} required error={fieldErrors.displayName} />
-        <div className="field"><label htmlFor="data-source-type">Source type</label><select id="data-source-type" data-testid="select-data-source-type" value={type} onChange={event => { setType(event.target.value as DataSourceType); setFieldErrors({}); setClearCredential(false); setRecordsPath(""); clearDiscovery(); }} aria-describedby="source-type-hint">{DATA_SOURCE_TYPES.map(value => <option value={value} key={value}>{sourceLabels[value]}</option>)}</select><span className="field-hint" id="source-type-hint">Changing type replaces the configuration metadata on save.</span></div>
+        <div className="field"><label htmlFor="data-source-type">Source type</label><select id="data-source-type" data-testid="select-data-source-type" value={type} onChange={event => { setType(event.target.value as DataSourceType); setFieldErrors({}); setClearCredential(false); setRecordsPath(""); setTrustPrivateHost(false); clearDiscovery(); }} aria-describedby="source-type-hint">{DATA_SOURCE_TYPES.map(value => <option value={value} key={value}>{sourceLabels[value]}</option>)}</select><span className="field-hint" id="source-type-hint">Changing type replaces the configuration metadata on save.</span></div>
         <div className="field"><label className="field-label">Record state</label><label className="check-row"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} data-testid="checkbox-source-enabled" /><span><strong>Enabled</strong><br /><span className="field-hint">Metadata only; no connector is started.</span></span></label></div>
         <div className="field span-2"><label htmlFor="source-description">Description</label><textarea id="source-description" data-testid="input-source-description" value={description} onChange={event => setDescription(event.target.value)} placeholder="Purpose, ownership, or operational context" /></div>
       </div>
@@ -1083,9 +1111,25 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       {type === "rest_api" && <div className="form-grid">
         <div className="field span-2">
           <label htmlFor="rest-base-url">REST base URL *</label>
-          <input id="rest-base-url" data-testid="input-rest-base-url" value={baseUrl} onChange={event => changeConfiguration(setBaseUrl, event.target.value)} placeholder="https://host.example/api" aria-invalid={Boolean(fieldErrors.baseUrl)} aria-describedby={fieldErrors.baseUrl ? "rest-base-url-error" : undefined} />
+          <input id="rest-base-url" data-testid="input-rest-base-url" value={baseUrl} onChange={event => changeBaseUrl(event.target.value)} placeholder="https://host.example/api" aria-invalid={Boolean(fieldErrors.baseUrl)} aria-describedby={fieldErrors.baseUrl ? "rest-base-url-error" : undefined} />
           {fieldErrors.baseUrl && <span className="field-error" id="rest-base-url-error" data-testid="error-source-base-url">{fieldErrors.baseUrl}</span>}
           <span className="field-hint">Saving does not make a request. Discovery and sync are separate, explicit GET actions.</span>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={trustPrivateHost}
+              disabled={!restHostname || isLoopbackHostname(restHostname)}
+              onChange={event => { setTrustPrivateHost(event.target.checked); clearDiscovery(); }}
+              data-testid="checkbox-trust-private-rest-host"
+            />
+            <span><strong>Trust this exact host for private-network access</strong><br /><span className="field-hint">
+              {isLoopbackHostname(restHostname)
+                ? "Loopback hosts cannot be trusted here."
+                : restHostname
+                  ? `Only ${restHostname} may resolve to private-network addresses for this source. Other private hosts, loopback, and metadata addresses remain blocked. Explicitly trust any redirect host through KUDU_REST_TRUSTED_HOSTS.`
+                  : "Enter a valid REST base URL first. This trust applies only to its exact hostname or IP."}
+            </span></span>
+          </label>
         </div>
         <div className="field span-2">
           <label htmlFor="rest-endpoint-path">Endpoint path *</label>

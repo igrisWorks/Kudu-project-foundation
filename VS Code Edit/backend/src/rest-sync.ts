@@ -35,7 +35,7 @@ const SOURCE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CREDENTIAL_REF_PATTERN = /^env:KUDU_SOURCE_[A-Z0-9_]{1,80}$/;
 
-interface NetworkPolicy {
+export interface NetworkPolicy {
   trustedHosts?: string[];
   allowLoopbackForTests?: boolean;
 }
@@ -111,16 +111,31 @@ const globalIpv6 = makeBlockList([["2000::", 3, "ipv6"]]);
 const loopbackIpv4 = makeBlockList([["127.0.0.0", 8, "ipv4"]]);
 const loopbackIpv6 = makeBlockList([["::1", 128, "ipv6"]]);
 
+function normalizeHostname(hostname: string): string {
+  return hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+}
+
 function normalizedHost(url: URL): string {
-  return url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  return normalizeHostname(url.hostname);
 }
 
 function getTrustedHosts(policy: NetworkPolicy): Set<string> {
   const configured = policy.trustedHosts ??
     (process.env.KUDU_REST_TRUSTED_HOSTS ?? "").split(",");
   return new Set(configured
-    .map((host) => host.trim().replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase())
+    .map((host) => normalizeHostname(host.trim()))
     .filter(Boolean));
+}
+
+export function networkPolicyForRestConfiguration(
+  policy: NetworkPolicy,
+  configuration: Pick<Extract<StoredSourceConfiguration, { kind: "rest_api" }>, "trustedPrivateHost">,
+): NetworkPolicy {
+  const trustedHosts = getTrustedHosts(policy);
+  if (configuration.trustedPrivateHost) {
+    trustedHosts.add(normalizeHostname(configuration.trustedPrivateHost));
+  }
+  return { ...policy, trustedHosts: [...trustedHosts] };
 }
 
 function isAllowedAddress(address: string, trusted: boolean, allowLoopbackForTests: boolean): boolean {
@@ -140,6 +155,27 @@ function isAllowedAddress(address: string, trusted: boolean, allowLoopbackForTes
   return false;
 }
 
+function isPrivateNetworkAddress(address: string): boolean {
+  const family = isIP(address);
+  return family === 4
+    ? privateIpv4.check(address, "ipv4")
+    : family === 6 && privateIpv6.check(address, "ipv6");
+}
+
+export function isAllowedRestAddress(
+  hostname: string,
+  address: string,
+  policy: NetworkPolicy = {},
+): boolean {
+  const host = normalizeHostname(hostname);
+  if (isIP(host) && host !== address.toLowerCase()) return false;
+  return isAllowedAddress(
+    address,
+    getTrustedHosts(policy).has(host),
+    policy.allowLoopbackForTests === true,
+  );
+}
+
 async function validateDestination(
   url: URL,
   policy: NetworkPolicy,
@@ -155,7 +191,6 @@ async function validateDestination(
     throw new RestRequestError("REST_DESTINATION_BLOCKED", "The remote destination is not allowed.", 403);
   }
   const host = normalizedHost(url);
-  const trusted = getTrustedHosts(policy).has(host);
   let addresses: LookupAddress[];
   if (isIP(host)) {
     addresses = [{ address: host, family: isIP(host) }];
@@ -179,11 +214,13 @@ async function validateDestination(
       if (timer) clearTimeout(timer);
     }
   }
-  if (
-    addresses.length === 0 ||
-    addresses.some((entry) => !isAllowedAddress(entry.address, trusted, policy.allowLoopbackForTests === true))
-  ) {
-    throw new RestRequestError("REST_DESTINATION_BLOCKED", "The remote destination is not allowed.", 403);
+  const trusted = getTrustedHosts(policy).has(host);
+  const blockedAddresses = addresses.filter((entry) => !isAllowedRestAddress(host, entry.address, policy));
+  if (addresses.length === 0 || blockedAddresses.length > 0) {
+    const message = blockedAddresses.some((entry) => isPrivateNetworkAddress(entry.address)) && !trusted
+      ? "This REST host resolves to a private-network address that is not trusted. Edit the source and enable trust for the exact base-URL hostname or IP. Loopback, link-local, cloud metadata, and reserved addresses remain blocked."
+      : "This REST destination resolves to loopback, link-local, cloud metadata, or another prohibited address. Private-host trust does not override those blocks.";
+    throw new RestRequestError("REST_DESTINATION_BLOCKED", message, 403);
   }
   return { addresses };
 }
@@ -290,6 +327,8 @@ async function requestJson(
 ): Promise<Buffer> {
   const deadline = Date.now() + timeoutMs;
   const credentialOrigin = initialUrl.origin;
+  const trustedHosts = getTrustedHosts(policy);
+  const requiresTrustedRedirectTarget = trustedHosts.has(normalizedHost(initialUrl));
   let url = initialUrl;
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
     const remainingMs = deadline - Date.now();
@@ -315,6 +354,12 @@ async function requestJson(
         next = new URL(location, url);
       } catch {
         throw new RestRequestError("REST_REDIRECT_REJECTED", "The remote redirect could not be followed.");
+      }
+      if (requiresTrustedRedirectTarget && !trustedHosts.has(normalizedHost(next))) {
+        throw new RestRequestError(
+          "REST_REDIRECT_REJECTED",
+          "A trusted REST host redirected to a different host. Set the source base URL to the final approved host or add that exact redirect host to KUDU_REST_TRUSTED_HOSTS.",
+        );
       }
       if (url.protocol === "https:" && next.protocol !== "https:") {
         throw new RestRequestError("REST_REDIRECT_REJECTED", "The remote redirect could not be followed.");
@@ -456,6 +501,7 @@ function runResult(row: SyncRunRow): RestSyncResult {
 function syncConfigFingerprint(configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }>): string {
   return createHash("sha256").update(canonicalJson({
     baseUrl: configuration.baseUrl,
+    trustedPrivateHost: configuration.trustedPrivateHost ?? "",
     endpointPath: configuration.endpointPath ?? "",
     method: configuration.method ?? "GET",
     authMode: configuration.authMode ?? "none",
@@ -857,6 +903,7 @@ export async function fetchRestDiscoveryDocument(
   const url = endpointUrl(configuration);
   const limits = validateLimits(configuration);
   if (!url || !limits) throw new ApiFailure(400, "SOURCE_CONFIGURATION_INVALID", "Configure a valid endpoint path and bounded request limits.");
+  const requestPolicy = networkPolicyForRestConfiguration(policy, configuration);
   if (configuration.authMode === "bearer" && url.protocol !== "https:") {
     throw new ApiFailure(400, "BEARER_REQUIRES_HTTPS", "Bearer authentication requires HTTPS.");
   }
@@ -877,7 +924,7 @@ export async function fetchRestDiscoveryDocument(
       token ? `Bearer ${token}` : undefined,
       limits.timeoutMs,
       limits.maxResponseBytes,
-      policy,
+      requestPolicy,
     );
   } catch (cause) {
     if (cause instanceof RestRequestError) throw new ApiFailure(cause.statusCode, cause.code, cause.message);
@@ -920,6 +967,7 @@ export async function extendRestDiscoverySample(
   const url = endpointUrl(configuration);
   const limits = validateLimits(configuration);
   if (!url || !limits) throw new ApiFailure(400, "SOURCE_CONFIGURATION_INVALID", "Configure a valid endpoint path and bounded request limits.");
+  const requestPolicy = networkPolicyForRestConfiguration(policy, configuration);
   if (configuration.authMode === "bearer" && url.protocol !== "https:") {
     throw new ApiFailure(400, "BEARER_REQUIRES_HTTPS", "Bearer authentication requires HTTPS.");
   }
@@ -968,7 +1016,7 @@ export async function extendRestDiscoverySample(
         token ? `Bearer ${token}` : undefined,
         limits.timeoutMs,
         limits.maxResponseBytes,
-        policy,
+        requestPolicy,
       );
     } catch (cause) {
       if (cause instanceof RestRequestError) throw new ApiFailure(cause.statusCode, cause.code, cause.message);
@@ -1101,7 +1149,7 @@ export function registerRestSyncRoutes(
       source.timeoutMs,
       source.maxResponseBytes,
       source.maxRecords,
-      policy,
+      networkPolicyForRestConfiguration(policy, source.configuration),
     );
   }
 

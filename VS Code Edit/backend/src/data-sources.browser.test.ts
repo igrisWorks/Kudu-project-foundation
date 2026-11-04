@@ -354,14 +354,69 @@ test(
     const syncHistoryBeforeRemoval = await manager.db.selectFrom("data_source_sync_runs").select("id").where("source_id", "=", templateSourceId).execute();
     const sourceEventsBeforeRemoval = await manager.db.selectFrom("events").select("id").where("source_id", "=", templateSourceId).execute();
     assert.ok(syncHistoryBeforeRemoval.length > 0 && sourceEventsBeforeRemoval.length > 0);
+    const sourceIdentity = await manager.db.selectFrom("data_sources")
+      .select(["source_key", "display_name"]).where("id", "=", templateSourceId).executeTakeFirst();
+    assert.ok(sourceIdentity);
     await evaluate("window.location.href = " + JSON.stringify(`/data-sources/${templateSourceId}`) + "; true");
     await waitFor("REST source removal control", "Boolean(document.querySelector('[data-testid=\"button-delete-data-source\"]'))");
-    await evaluate("window.confirm = () => true");
+    await evaluate("window.confirm = message => { window.__lastConfirmation = message; return true; }");
     await click('[data-testid="button-delete-data-source"]');
     await waitFor("source archived with history retained", "Boolean(document.querySelector('[data-testid=\"notice-source-archived\"]'))");
+    const sourceConfirmation = await evaluate("window.__lastConfirmation ?? ''");
+    assert.ok(sourceConfirmation.includes(sourceIdentity.display_name));
+    assert.ok(sourceConfirmation.includes(sourceIdentity.source_key));
+    await waitFor("refreshed list keeps the archived source visible", `Boolean(document.querySelector('[data-testid="row-data-source-${templateSourceId}"]'))`);
+    const refreshedSourceRow = await evaluate(`document.querySelector('[data-testid="row-data-source-${templateSourceId}"]')?.innerText ?? ''`);
+    assert.ok(refreshedSourceRow.includes(sourceIdentity.source_key));
+    assert.ok(refreshedSourceRow.includes("DISABLED"));
     const retainedSource = await manager.db.selectFrom("data_sources").select("enabled").where("id", "=", templateSourceId).executeTakeFirst();
     const retainedEvents = await manager.db.selectFrom("events").select("id").where("source_id", "=", templateSourceId).execute();
     assert.equal(retainedSource?.enabled, false);
     assert.equal(retainedEvents.length, sourceEventsBeforeRemoval.length);
+
+    await evaluate("window.location.href = '/data-sources/new'; true");
+    await waitFor("new private REST source form", "Boolean(document.querySelector('[data-testid=\"input-source-key\"]'))");
+    await setValue('[data-testid="input-source-key"]', "browser-private-host");
+    await setValue('[data-testid="input-source-display-name"]', "Browser Private Host");
+    await setValue('[data-testid="input-rest-base-url"]', "http://10.11.36.65/api");
+    await setValue('[data-testid="input-rest-endpoint-path"]', "events");
+    await click('[data-testid="checkbox-trust-private-rest-host"]');
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-testid=\"checkbox-trust-private-rest-host\"]')?.checked)"), true);
+    await click('[data-testid="button-submit-data-source"]');
+    await waitFor(
+      "saved exact private-host trust",
+      "document.querySelector('[data-testid=\"text-source-trusted-private-host\"]')?.innerText.includes('Trusted exact host: 10.11.36.65')",
+    );
+    const trustedSource = await manager.db.selectFrom("data_sources").select(["id", "configuration"])
+      .where("source_key", "=", "browser-private-host").executeTakeFirst();
+    assert.equal(trustedSource?.configuration.kind, "rest_api");
+    if (trustedSource?.configuration.kind === "rest_api") {
+      assert.equal(trustedSource.configuration.trustedPrivateHost, "10.11.36.65");
+    }
+    await evaluate("window.location.href = " + JSON.stringify(`/data-sources/${trustedSource?.id}/edit`) + "; true");
+    await waitFor(
+      "trusted-host setting restored in edit form",
+      "Boolean(document.querySelector('[data-testid=\"checkbox-trust-private-rest-host\"]')?.checked)",
+    );
+    assert.ok(trustedSource?.id);
+    const privateSourceIdentity = await manager.db.selectFrom("data_sources")
+      .select(["source_key", "display_name"]).where("id", "=", trustedSource.id).executeTakeFirst();
+    assert.ok(privateSourceIdentity);
+    await evaluate("window.location.href = " + JSON.stringify(`/data-sources/${trustedSource.id}`) + "; true");
+    await waitFor("new source removal control", "Boolean(document.querySelector('[data-testid=\"button-delete-data-source\"]'))");
+    await evaluate("window.confirm = message => { window.__lastConfirmation = message; return true; }");
+    await click('[data-testid="button-delete-data-source"]');
+    await waitFor("source with no history deleted", "Boolean(document.querySelector('[data-testid=\"notice-source-deleted\"]'))");
+    const privateSourceConfirmation = await evaluate("window.__lastConfirmation ?? ''");
+    assert.ok(privateSourceConfirmation.includes(privateSourceIdentity.display_name));
+    assert.ok(privateSourceConfirmation.includes(privateSourceIdentity.source_key));
+    await waitFor(
+      "source list refreshed after deletion",
+      "Boolean(document.querySelector('tbody tr') || document.querySelector('[data-testid=\"button-empty-create-data-source\"]'))",
+    );
+    assert.equal(
+      await evaluate(`Boolean(document.querySelector('[data-testid="row-data-source-${trustedSource.id}"]'))`),
+      false,
+    );
   },
 );

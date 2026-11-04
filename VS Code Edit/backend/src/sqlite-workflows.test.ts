@@ -131,11 +131,22 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
       const imported = await call("POST", `/api/v1/data-sources/${source.id}/import`, undefined, 200);
       assert.equal(imported.imported, 1, JSON.stringify(imported));
     }
+    const restConfig = {
+      kind: "rest_api",
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      endpointPath: "/events",
+      method: "GET",
+      authMode: "none",
+      trustedPrivateHost: "127.0.0.1",
+      recordsPath: "items",
+    };
+    const discoveredRest = await call("POST", "/api/v1/data-sources/discover", {
+      sourceType: "rest_api",
+      configuration: restConfig,
+    }, 200);
+    assert.equal(discoveredRest.selectedRecordPath, "items");
     const rest = await call("POST", "/api/v1/data-sources", {
-      sourceKey: "rest", displayName: "REST", sourceType: "rest_api", configuration: {
-        kind: "rest_api", baseUrl: `http://127.0.0.1:${address.port}`, endpointPath: "/events",
-        method: "GET", authMode: "none", recordsPath: "items",
-      },
+      sourceKey: "rest", displayName: "REST", sourceType: "rest_api", configuration: restConfig,
     });
     await mapping(rest.id);
     const synced = await call("POST", `/api/v1/data-sources/${rest.id}/sync`, undefined, 200);
@@ -175,6 +186,8 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
       db: manager.db, localMode: true, localDatabase: manager,
       allowLoopbackRestTests: true, logLevel: "silent",
     });
+    const persistedRest = await call("GET", `/api/v1/data-sources/${rest.id}`);
+    assert.equal(persistedRest.configuration.trustedPrivateHost, "127.0.0.1");
     assert.equal((await call("GET", "/api/v1/events")).total, before.total);
     assert.equal((await call("GET", "/api/v1/assets")).total, 4);
     assert.equal((await call("GET", "/api/v1/data-sources")).total, 5);

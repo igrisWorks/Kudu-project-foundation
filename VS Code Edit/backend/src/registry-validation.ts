@@ -427,16 +427,18 @@ function parseConfiguration(
       value,
       [
         "kind", "baseUrl", "endpointPath", "method", "authMode", "credentialRef",
-        "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath", "pagination",
+        "trustedPrivateHost", "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath", "pagination",
       ],
       errors,
     );
     const baseUrl = requiredText(value, "baseUrl", 2000, errors);
     let baseProtocol = "";
+    let baseHost = "";
     if (baseUrl) {
       try {
         const parsed = new URL(baseUrl);
         baseProtocol = parsed.protocol;
+        baseHost = parsed.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
         if (
           (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
           !parsed.hostname ||
@@ -450,6 +452,26 @@ function parseConfiguration(
         }
       } catch {
         errors["configuration.baseUrl"] = "Enter a valid HTTP or HTTPS URL.";
+      }
+    }
+    let trustedPrivateHost: string | undefined;
+    if (Object.hasOwn(value, "trustedPrivateHost")) {
+      if (
+        typeof value.trustedPrivateHost !== "string" ||
+        !value.trustedPrivateHost.trim() ||
+        value.trustedPrivateHost.trim().length > 253
+      ) {
+        errors["configuration.trustedPrivateHost"] = "Trust must name the exact hostname or IP from the base URL.";
+      } else {
+        const candidate = value.trustedPrivateHost.trim()
+          .replace(/^\[|\]$/g, "")
+          .replace(/\.$/, "")
+          .toLowerCase();
+        if (!baseHost || candidate !== baseHost) {
+          errors["configuration.trustedPrivateHost"] = "Only the exact host in the REST base URL can be trusted.";
+        } else {
+          trustedPrivateHost = baseHost;
+        }
       }
     }
 
@@ -508,6 +530,7 @@ function parseConfiguration(
       ...(method !== undefined ? { method } : {}),
       ...(authMode !== undefined ? { authMode } : {}),
       ...(credentialRef !== undefined ? { credentialRef } : {}),
+      ...(trustedPrivateHost !== undefined ? { trustedPrivateHost } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
       ...(maxRecords !== undefined ? { maxRecords } : {}),

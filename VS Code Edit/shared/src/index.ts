@@ -117,6 +117,7 @@ export type DataSourceConfigurationInput =
       method?: "GET";
       authMode?: RestApiAuthMode;
       credentialRef?: string | null;
+      trustedPrivateHost?: string;
       timeoutMs?: number;
       maxResponseBytes?: number;
       maxRecords?: number;
@@ -133,6 +134,7 @@ export type DataSourceConfigurationMetadata =
       kind: "rest_api";
       baseUrl: string;
       credentialConfigured: boolean;
+      trustedPrivateHost?: string;
       endpointPath?: string;
       method?: "GET";
       authMode?: RestApiAuthMode;

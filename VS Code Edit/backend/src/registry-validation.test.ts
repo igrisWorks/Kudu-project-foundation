@@ -93,6 +93,28 @@ test("REST configuration permits only safe HTTP metadata and environment referen
   );
 });
 
+test("REST private-host trust is explicit and bound to the configured base URL host", () => {
+  const base = {
+    sourceKey: "factory-api",
+    displayName: "Factory API",
+    sourceType: "rest_api",
+    configuration: {
+      kind: "rest_api",
+      baseUrl: "http://10.11.36.65/api",
+      trustedPrivateHost: "10.11.36.65",
+    },
+  };
+  assert.equal(validateDataSourceCreate(base).configuration.kind, "rest_api");
+  expectValidationFailure(() => validateDataSourceCreate({
+    ...base,
+    configuration: { ...base.configuration, trustedPrivateHost: "10.11.36.66" },
+  }));
+  expectValidationFailure(() => validateDataSourceCreate({
+    ...base,
+    configuration: { ...base.configuration, trustedPrivateHost: "*" },
+  }));
+});
+
 test("REST pagination is opt-in and validates bounded strategies and parameters", () => {
   const base = {
     sourceKey: "history",

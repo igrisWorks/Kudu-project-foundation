@@ -187,6 +187,9 @@ function sourceConfigurationMetadata(
         kind: "rest_api",
         baseUrl: configuration.baseUrl,
         credentialConfigured: Boolean(configuration.credentialRef),
+        ...(configuration.trustedPrivateHost !== undefined
+          ? { trustedPrivateHost: configuration.trustedPrivateHost }
+          : {}),
         ...(configuration.endpointPath !== undefined ? { endpointPath: configuration.endpointPath } : {}),
         ...(configuration.method !== undefined ? { method: configuration.method } : {}),
         ...(configuration.authMode !== undefined ? { authMode: configuration.authMode } : {}),

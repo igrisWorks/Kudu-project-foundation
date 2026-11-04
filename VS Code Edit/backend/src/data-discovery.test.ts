@@ -8,7 +8,58 @@ import { buildDiscoveryResult } from "./data-discovery.js";
 import { createApp } from "./app.js";
 import { LocalDatabaseManager } from "./local-database.js";
 import { normalizeOccurrenceTimestamp } from "./event-mappings.js";
-import { extendRestDiscoverySample, fetchRestDiscoveryDocument } from "./rest-sync.js";
+import {
+  extendRestDiscoverySample,
+  fetchRestDiscoveryDocument,
+  isAllowedRestAddress,
+  networkPolicyForRestConfiguration,
+} from "./rest-sync.js";
+
+test("private REST trust is exact-host scoped and never permits loopback or metadata addresses", () => {
+  const policy = networkPolicyForRestConfiguration(
+    { trustedHosts: [] },
+    { trustedPrivateHost: "10.11.36.65" },
+  );
+  assert.equal(isAllowedRestAddress("10.11.36.65", "10.11.36.65", policy), true);
+  assert.equal(isAllowedRestAddress("factory-api.internal", "10.11.36.65", policy), false);
+  assert.equal(isAllowedRestAddress("10.11.36.65", "127.0.0.1", policy), false);
+  assert.equal(isAllowedRestAddress("10.11.36.65", "169.254.169.254", policy), false);
+  assert.equal(isAllowedRestAddress("10.11.36.65", "192.168.1.2", policy), false);
+  const trustedHostnamePolicy = networkPolicyForRestConfiguration(
+    { trustedHosts: [] },
+    { trustedPrivateHost: "factory-api.internal" },
+  );
+  assert.equal(isAllowedRestAddress("factory-api.internal", "192.168.1.2", trustedHostnamePolicy), true);
+});
+
+test("a trusted REST host cannot redirect to a host that is not explicitly trusted", async () => {
+  let requestCount = 0;
+  const server = createServer((_request, response) => {
+    requestCount += 1;
+    response.writeHead(302, { location: `http://localhost:${(server.address() as { port: number }).port}/redirected` });
+    response.end();
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as { port: number };
+  try {
+    await assert.rejects(
+      fetchRestDiscoveryDocument({
+        kind: "rest_api",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        endpointPath: "events",
+      }, { trustedHosts: ["127.0.0.1"], allowLoopbackForTests: true }),
+      (error: unknown) => {
+        const apiError = error as { code?: string; message?: string };
+        assert.equal(apiError.code, "REST_REDIRECT_REJECTED");
+        assert.match(apiError.message ?? "", /KUDU_REST_TRUSTED_HOSTS/);
+        return true;
+      },
+    );
+    assert.equal(requestCount, 1, "the redirected host must not receive a request");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
 
 test("discovery finds record collections and does not choose between ambiguous arrays", () => {
   const { result } = buildDiscoveryResult("rest_api", {
@@ -450,6 +501,7 @@ test("Local SQLite REST discovery accepts the Vite origin while preserving origi
     });
     assert.equal(privateDestination.statusCode, 403);
     assert.equal(privateDestination.json().error.code, "REST_DESTINATION_BLOCKED");
+    assert.match(privateDestination.json().error.message, /enable trust for the exact base-URL hostname or IP/i);
     assert.equal(fixtureRequests, 1, "an untrusted private destination must remain blocked");
   } finally {
     if (previousPort === undefined) delete process.env.PORT;
