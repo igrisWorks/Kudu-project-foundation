@@ -2,12 +2,15 @@ import type {
   DataSourceConfigurationInput,
   DataSourceDiscoveryResult,
   DataSourceType,
+  DiscoveredStructure,
+  DiscoveredStructureField,
   DiscoveredField,
   DiscoveryRecordPath,
   JsonObject,
   SuggestedFieldMapping,
   SuggestedTargetField,
 } from "@kudu/shared";
+import { SUGGESTED_PAYLOAD_TARGETS } from "@kudu/shared";
 import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import { ApiFailure } from "./errors.js";
@@ -27,10 +30,22 @@ const MAX_DISCOVERY_DEPTH = 8;
 const MAX_DISCOVERY_NODES = 5_000;
 const MAX_RECORD_PATHS = 20;
 const MAX_DISCOVERY_FIELDS = 80;
+const MAX_DISCOVERY_STRUCTURES = 40;
+const MAX_STRUCTURE_NODES = 1_000;
+const MAX_STRUCTURE_CHILD_FIELDS = 12;
 const MAX_PREVIEW_RECORDS = 5;
 const MAX_EXAMPLE_LENGTH = 96;
 const sensitiveName = /password|secret|token|credential|authorization|cookie|api.?key|private.?key|bearer/i;
 const unsafePathParts = new Set(["__proto__", "prototype", "constructor"]);
+const placeholderValues = new Set(["", "null", "undefined", "n/a", "na", "none", "not available", "tbd", "-", "--"]);
+
+type RecognitionShape = "scalar" | "object" | "container";
+type TargetAliasDefinition = {
+  names: Record<string, number>;
+  label: string;
+  required: boolean;
+  shape: RecognitionShape;
+};
 
 interface LocatedArray {
   path: string;
@@ -39,48 +54,108 @@ interface LocatedArray {
   supported: boolean;
 }
 
-const aliases: Record<SuggestedTargetField, { names: Record<string, number>; label: string; required: boolean }> = {
+interface InspectedField extends DiscoveredField {
+  presentCount: number;
+  placeholderCount: number;
+  validTimestampCount: number;
+  numericCount: number;
+}
+
+const aliases: Record<SuggestedTargetField, TargetAliasDefinition> = {
   eventType: {
     names: {
       eventtype: 0.98, faulttype: 0.98, alarmtype: 0.98, eventname: 0.94, faultname: 0.94,
-      alarmname: 0.94, category: 0.8, type: 0.74, event: 0.68,
+      alarmname: 0.94, incidenttype: 0.92, eventkind: 0.91, fault: 0.86, alarm: 0.86,
+      category: 0.8, type: 0.74, event: 0.68,
     },
-    label: "Event type", required: true,
+    label: "Event type", required: true, shape: "scalar",
   },
   occurredAt: {
     names: {
       occurredat: 0.98, eventtime: 0.96, faulttime: 0.96, eventdatetime: 0.96, faulttimestamp: 0.96,
-      alarmdatetime: 0.96, occurredtime: 0.94, alarmtime: 0.92, timestamp: 0.9, timestamputc: 0.9,
-      datetime: 0.88, createdat: 0.82, receivedat: 0.8, time: 0.68, created: 0.64,
+      alarmdatetime: 0.96, occurredtime: 0.94, eventtimestamp: 0.94, alarmtime: 0.92,
+      timestamp: 0.9, timestamputc: 0.9, datetime: 0.88, starttime: 0.84,
+      createdat: 0.82, receivedat: 0.8, time: 0.68, created: 0.64,
     },
-    label: "Occurrence time", required: true,
+    label: "Occurrence time", required: true, shape: "scalar",
   },
   sourceRecordId: {
     names: {
       sourcerecordid: 0.99, eventid: 0.98, faultid: 0.98, alarmid: 0.96, recordid: 0.96,
-      occurrenceid: 0.94, eventuuid: 0.92, faultnumber: 0.82, id: 0.66,
+      occurrenceid: 0.94, eventuuid: 0.92, recordnumber: 0.84, faultnumber: 0.82, id: 0.66,
     },
-    label: "Source record ID", required: false,
+    label: "Source record ID", required: false, shape: "scalar",
   },
   assetKey: {
     names: {
-      assetkey: 0.98, assetid: 0.94, machineid: 0.9, equipmentid: 0.9, deviceid: 0.9,
-      machinekey: 0.9, equipmentkey: 0.9, devicekey: 0.9, machinename: 0.84,
-      equipmentname: 0.84, unitid: 0.8, stationid: 0.8, lineid: 0.76,
+      assetkey: 0.98, assetid: 0.94, assetidentifier: 0.94, machineid: 0.9, equipmentid: 0.9, deviceid: 0.9,
+      machinekey: 0.9, equipmentkey: 0.9, devicekey: 0.9, unitid: 0.8, stationid: 0.8, lineid: 0.76,
     },
-    label: "Asset identifier", required: false,
+    label: "Asset identifier", required: false, shape: "scalar",
   },
   message: {
     names: { faultmessage: 0.98, eventmessage: 0.98, alarmmessage: 0.98, message: 0.95, description: 0.9, details: 0.83, text: 0.7 },
-    label: "Message", required: false,
+    label: "Message", required: false, shape: "scalar",
   },
   severity: {
     names: { severity: 0.98, severitylevel: 0.96, alarmpriority: 0.94, priority: 0.89, criticality: 0.85, level: 0.74 },
-    label: "Severity", required: false,
+    label: "Severity", required: false, shape: "scalar",
   },
   errorCode: {
     names: { faultcode: 0.98, errorcode: 0.98, alarmcode: 0.95, diagnosticcode: 0.95, eventcode: 0.83, code: 0.7 },
-    label: "Error code", required: false,
+    label: "Error code", required: false, shape: "scalar",
+  },
+  assetName: {
+    names: {
+      assetname: 0.97, equipmentname: 0.94, machinename: 0.92, devicename: 0.9,
+      unitname: 0.86, stationname: 0.84,
+    },
+    label: "Asset name", required: false, shape: "scalar",
+  },
+  status: {
+    names: {
+      status: 0.97, state: 0.94, operationalstate: 0.96, operatingstate: 0.96,
+      condition: 0.9, health: 0.86, mode: 0.82,
+    },
+    label: "Asset or event state", required: false, shape: "scalar",
+  },
+  measurementName: {
+    names: {
+      measurementname: 0.98, metricname: 0.97, parametername: 0.93,
+      signalname: 0.9, tagname: 0.86, measurement: 0.82, metric: 0.8,
+    },
+    label: "Measurement name", required: false, shape: "scalar",
+  },
+  measurementValue: {
+    names: {
+      measurementvalue: 0.98, measuredvalue: 0.97, processvalue: 0.92,
+      reading: 0.9, numericvalue: 0.88, value: 0.68,
+    },
+    label: "Measurement value", required: false, shape: "scalar",
+  },
+  measurementUnit: {
+    names: {
+      measurementunit: 0.98, unitofmeasure: 0.96, units: 0.9, uom: 0.9, unit: 0.68,
+    },
+    label: "Measurement unit", required: false, shape: "scalar",
+  },
+  measurements: {
+    names: { measurements: 0.99, measurement: 0.94, readings: 0.94, metrics: 0.94, observations: 0.9 },
+    label: "Measurement group", required: false, shape: "container",
+  },
+  relationships: {
+    names: {
+      relationships: 0.99, relationship: 0.98, relations: 0.95,
+      links: 0.9, references: 0.9, parent: 0.84, children: 0.84,
+    },
+    label: "Relationships", required: false, shape: "container",
+  },
+  sourceMetadata: {
+    names: {
+      sourcemetadata: 0.99, metadata: 0.97, sourceinfo: 0.94,
+      attributes: 0.9, context: 0.82, properties: 0.78,
+    },
+    label: "Source metadata", required: false, shape: "object",
   },
 };
 
@@ -162,52 +237,87 @@ function locateRecordArrays(value: unknown): { arrays: LocatedArray[]; truncated
   return { arrays, truncated, nestedArrays };
 }
 
-function collectLeafFields(records: Record<string, unknown>[], csv = false): DiscoveredField[] {
-  const types = new Map<string, Set<DiscoveredField["valueType"]>>();
-  const examples = new Map<string, string[]>();
+function isPlaceholder(value: unknown): boolean {
+  return value === null || value === undefined ||
+    (typeof value === "string" && placeholderValues.has(value.trim().toLowerCase()));
+}
+
+function isNumericValue(value: unknown, csv = false): boolean {
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "string" || (!csv && !value.trim())) return false;
+  return /^-?(?:\d+\.?\d*|\.\d+)$/.test(value.trim()) && Number.isFinite(Number(value));
+}
+
+function discoveredValueType(value: unknown, csv = false): DiscoveredField["valueType"] {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "unknown";
+  if (isRecord(value)) return "object";
+  if (typeof value === "string" || typeof value === "number") {
+    if (normalizeOccurrenceTimestamp(value)) return "datetime";
+    if (csv && typeof value === "string") {
+      if (/^(true|false)$/i.test(value.trim())) return "boolean";
+      if (isNumericValue(value, true)) return "number";
+    }
+    return typeof value as "string" | "number";
+  }
+  if (typeof value === "boolean") return "boolean";
+  return "unknown";
+}
+
+function collectLeafFields(records: Record<string, unknown>[], csv = false): InspectedField[] {
+  const entries = new Map<string, {
+    types: Set<DiscoveredField["valueType"]>;
+    examples: string[];
+    presentCount: number;
+    placeholderCount: number;
+    validTimestampCount: number;
+    numericCount: number;
+  }>();
   const visit = (value: unknown, path: string, depth: number) => {
-    if (!path || !supportedPath(path) || depth > MAX_DISCOVERY_DEPTH || sensitiveName.test(path.split(".").at(-1) ?? "")) return;
+    const leafName = path.split(".").at(-1) ?? "";
+    if (!path || !supportedPath(path) || depth > MAX_DISCOVERY_DEPTH || sensitiveName.test(leafName)) return;
+    const valueType = discoveredValueType(value, csv);
+    const entry = entries.get(path) ?? {
+      types: new Set<DiscoveredField["valueType"]>(),
+      examples: [],
+      presentCount: 0,
+      placeholderCount: 0,
+      validTimestampCount: 0,
+      numericCount: 0,
+    };
+    entry.types.add(valueType);
+    entry.presentCount += 1;
+    if (isPlaceholder(value)) entry.placeholderCount += 1;
+    if (normalizeOccurrenceTimestamp(value)) entry.validTimestampCount += 1;
+    if (!isPlaceholder(value) && isNumericValue(value, csv)) entry.numericCount += 1;
+    if (entry.examples.length < 3 && value !== undefined) {
+      const example = displayExample(value, leafName);
+      if (!entry.examples.includes(example)) entry.examples.push(example);
+    }
+    entries.set(path, entry);
+
     if (isRecord(value)) {
       for (const [key, child] of Object.entries(value)) {
-        if (types.size >= MAX_DISCOVERY_FIELDS) return;
+        if (entries.size >= MAX_DISCOVERY_FIELDS) break;
         if (safePathSegment(key)) visit(child, `${path}.${key}`, depth + 1);
       }
-      return;
-    }
-    let valueType: DiscoveredField["valueType"] = Array.isArray(value)
-      ? "array"
-      : value === null ? "unknown"
-        : typeof value === "object" ? "object"
-          : typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-            ? typeof value as "string" | "number" | "boolean"
-            : "unknown";
-    if (typeof value === "string" && normalizeOccurrenceTimestamp(value)) {
-      valueType = "datetime";
-    } else if (typeof value === "number" && normalizeOccurrenceTimestamp(value)) {
-      valueType = "datetime";
-    } else if (csv && typeof value === "string") {
-      if (/^(true|false)$/i.test(value.trim())) valueType = "boolean";
-      else if (/^-?(?:\d+\.?\d*|\.\d+)$/.test(value.trim()) && Number.isFinite(Number(value))) valueType = "number";
-    }
-    const foundTypes = types.get(path) ?? new Set<DiscoveredField["valueType"]>();
-    foundTypes.add(valueType);
-    types.set(path, foundTypes);
-    const foundExamples = examples.get(path) ?? [];
-    if (foundExamples.length < 3 && value !== undefined && !foundExamples.includes(displayExample(value))) {
-      foundExamples.push(displayExample(value));
-      examples.set(path, foundExamples);
     }
   };
+
   for (const record of records) {
     for (const [key, value] of Object.entries(record)) {
-      if (types.size >= MAX_DISCOVERY_FIELDS) break;
+      if (entries.size >= MAX_DISCOVERY_FIELDS) break;
       if (safePathSegment(key)) visit(value, key, 1);
     }
   }
-  return [...types.entries()].map(([path, foundTypes]) => ({
+  return [...entries.entries()].map(([path, entry]) => ({
     path,
-    valueType: foundTypes.size > 1 ? "mixed" : [...foundTypes][0] ?? "unknown",
-    examples: examples.get(path) ?? [],
+    valueType: entry.types.size > 1 ? "mixed" : [...entry.types][0] ?? "unknown",
+    examples: entry.examples,
+    presentCount: entry.presentCount,
+    placeholderCount: entry.placeholderCount,
+    validTimestampCount: entry.validTimestampCount,
+    numericCount: entry.numericCount,
   })).sort((left, right) => left.path.localeCompare(right.path));
 }
 
@@ -215,47 +325,76 @@ function lastPathPart(path: string): string {
   return normalizedName(path.split(".").at(-1) ?? "");
 }
 
-function isTimestampExample(value: string): boolean {
-  if (/^-?\d{9,16}$/.test(value)) return Boolean(normalizeOccurrenceTimestamp(Number(value)));
-  return Boolean(normalizeOccurrenceTimestamp(value));
+function shapeMatches(field: InspectedField, shape: RecognitionShape): boolean {
+  if (shape === "scalar") return field.valueType !== "object" && field.valueType !== "array";
+  if (shape === "object") return field.valueType === "object";
+  return field.valueType === "object" || field.valueType === "array";
 }
 
-function makeSuggestions(fields: DiscoveredField[]): SuggestedFieldMapping[] {
+function makeSuggestions(fields: InspectedField[], sampleCount: number): SuggestedFieldMapping[] {
   return (Object.entries(aliases) as Array<[SuggestedTargetField, typeof aliases[SuggestedTargetField]]>).map(([target, spec]) => {
     const candidates = fields.flatMap(field => {
       const name = lastPathPart(field.path);
       const aliasScore = spec.names[name];
-      if (aliasScore === undefined) return [];
+      if (aliasScore === undefined || !shapeMatches(field, spec.shape)) return [];
       let score = aliasScore;
-      const examples = field.examples;
+      const presentRatio = sampleCount ? field.presentCount / sampleCount : 0;
+      const usableCount = Math.max(0, field.presentCount - field.placeholderCount);
+      const usableRatio = field.presentCount ? usableCount / field.presentCount : 0;
+      if (presentRatio >= 0.8) score += 0.04;
+      else if (presentRatio < 0.5) score -= 0.14;
+      if (usableRatio < 0.5) score -= 0.2;
+      else if (usableRatio < 0.8) score -= 0.08;
+      if (field.valueType === "mixed") score -= 0.12;
+
       if (target === "occurredAt") {
-        if (examples.some(isTimestampExample)) score = Math.min(0.99, score + 0.08);
-        else score -= 0.38;
-        if (field.valueType === "datetime") score = Math.min(0.99, score + 0.04);
+        const timestampRatio = field.presentCount ? field.validTimestampCount / field.presentCount : 0;
+        if (timestampRatio >= 0.8) score += 0.14;
+        else if (timestampRatio > 0) score += 0.04;
+        else score -= 0.4;
+        if (field.valueType === "datetime") score += 0.04;
       }
-      const stringOrNumber = field.valueType === "string" || field.valueType === "number";
-      if (target === "eventType") {
-        if (field.valueType === "string") score += 0.03;
-        else score -= 0.28;
+      if (target === "measurementValue") {
+        const numericRatio = usableCount ? field.numericCount / usableCount : 0;
+        if (numericRatio >= 0.8) score += 0.1;
+        else if (numericRatio > 0) score += 0.04;
+        else score -= 0.12;
       }
-      if (target === "sourceRecordId" || target === "assetKey" || target === "severity" || target === "errorCode") {
-        if (!stringOrNumber) score -= 0.18;
+      if (target === "eventType" || target === "message" || target === "severity" ||
+        target === "errorCode" || target === "assetName" || target === "status" ||
+        target === "measurementName" || target === "measurementUnit" || target === "sourceRecordId" ||
+        target === "assetKey") {
+        if (field.valueType === "string" || field.valueType === "datetime") score += 0.03;
+        else if (field.valueType === "number") score += 0.01;
+        else if (field.valueType === "boolean") score -= 0.08;
       }
-      if (target === "message") {
-        if (field.valueType === "string") score += 0.02;
-        else score -= 0.2;
-      }
-      if (field.valueType === "mixed") score -= 0.1;
-      return [{ field, score }];
+      const evidence = {
+        presentRatio,
+        usableRatio,
+        timestampRatio: field.presentCount ? field.validTimestampCount / field.presentCount : 0,
+      };
+      return [{ field, score: Math.max(0, Math.min(0.99, score)), evidence }];
     }).sort((left, right) => right.score - left.score || left.field.path.localeCompare(right.field.path));
     const top = candidates[0];
     const ambiguous = Boolean(top && candidates.length > 1 && top.score - candidates[1]!.score < 0.12);
     const confidenceScore = Math.max(0, Math.min(0.99, top?.score ?? 0));
     const confidence = confidenceScore >= 0.85 ? "high" : confidenceScore >= 0.65 ? "medium" : "low";
-    const sourcePath = top && !ambiguous && confidenceScore >= 0.65 ? top.field.path : null;
+    const safeEvidence = Boolean(top &&
+      top.evidence.presentRatio >= 0.8 &&
+      top.evidence.usableRatio >= 0.8 &&
+      (target !== "occurredAt" || top.evidence.timestampRatio >= 0.8));
+    const sourcePath = top && !ambiguous && confidence === "high" && safeEvidence ? top.field.path : null;
+    const evidenceText = top
+      ? `${top.field.presentCount} of ${sampleCount} sampled records contain this field; ${Math.max(0, top.field.presentCount - top.field.placeholderCount)} contain non-placeholder values.` +
+        (target === "occurredAt"
+          ? ` ${top.field.validTimestampCount} contain a valid explicitly zoned or supported Unix timestamp.`
+          : "")
+      : "";
     let note = !top ? "No matching field was found. Choose a source field during review." :
       ambiguous ? "Several source fields are plausible. Choose one; none has been selected." :
-        confidence === "low" ? "Low-confidence match. Confirm the source field manually." : "Review this suggestion and its example before activation.";
+        confidence !== "high" || !safeEvidence
+          ? `Evidence is insufficient for preselection. Review the field and examples. ${evidenceText}`
+          : `Strong name and sample evidence; review before validation and activation. ${evidenceText}`;
     if (target === "assetKey" && sourcePath && sourcePath !== "assetKey") {
       note = "This may be an external asset ID or name, not a registered KuduNS asset key. Confirm the match; unmatched assets are not auto-associated.";
     }
@@ -273,10 +412,177 @@ function makeSuggestions(fields: DiscoveredField[]): SuggestedFieldMapping[] {
   });
 }
 
+function possibleTargetForStructureField(path: string, valueType: DiscoveredField["valueType"]): SuggestedTargetField | undefined {
+  const name = normalizedName(path.replace(/\[\]/g, "").split(".").at(-1) ?? "");
+  const candidates = (Object.entries(aliases) as Array<[SuggestedTargetField, TargetAliasDefinition]>)
+    .flatMap(([target, spec]) => {
+      const score = spec.names[name];
+      if (score === undefined) return [];
+      const field = {
+        path,
+        valueType,
+        examples: [],
+        presentCount: 1,
+        placeholderCount: 0,
+        validTimestampCount: 0,
+        numericCount: 0,
+      };
+      return shapeMatches(field, spec.shape) ? [{ target, score }] : [];
+    })
+    .sort((left, right) => right.score - left.score || left.target.localeCompare(right.target));
+  const top = candidates[0];
+  if (!top || top.score < 0.78 || (candidates[1] && top.score - candidates[1]!.score < 0.12)) return undefined;
+  return top.target;
+}
+
+function structureMeaning(
+  path: string,
+  kind: "object" | "array",
+  childFields: DiscoveredStructureField[],
+): { meaning: DiscoveredStructure["possibleMeaning"]; confidenceScore: number; note: string } {
+  const segments = path.replace(/\[\]/g, "").split(".").map(normalizedName);
+  if (segments.some(segment => ["measurement", "measurements", "metric", "metrics", "reading", "readings", "observation", "observations"].includes(segment))) {
+    return {
+      meaning: "measurements",
+      confidenceScore: 0.92,
+      note: "The structure name suggests measurement data; its contents are retained as-is and are not flattened.",
+    };
+  }
+  if (segments.some(segment => ["relationship", "relationships", "relation", "relations", "link", "links", "reference", "references", "parent", "parents", "child", "children"].includes(segment))) {
+    return {
+      meaning: "relationships",
+      confidenceScore: 0.9,
+      note: "The structure name suggests relationships; inspect its child fields before deciding how to use it.",
+    };
+  }
+  if (segments.some(segment => ["metadata", "attributes", "context", "properties", "sourceinfo"].includes(segment))) {
+    return {
+      meaning: "source-metadata",
+      confidenceScore: 0.9,
+      note: "The structure name suggests source metadata; it remains a structured value in the original record.",
+    };
+  }
+  if (
+    kind === "array" &&
+    childFields.some(field => field.possibleTarget === "eventType") &&
+    childFields.some(field => field.possibleTarget === "occurredAt")
+  ) {
+    return {
+      meaning: "event-records",
+      confidenceScore: 0.76,
+      note: "Child field names resemble event records, but array entries are not mapped as scalar fields.",
+    };
+  }
+  return {
+    meaning: "unknown",
+    confidenceScore: 0,
+    note: "The structure is shown without assigning a meaning because the available evidence is insufficient.",
+  };
+}
+
+function collectStructures(records: Record<string, unknown>[], csv = false): DiscoveredStructure[] {
+  interface MutableStructure {
+    path: string;
+    kind: "object" | "array";
+    sampleCount: number;
+    itemCount: number;
+    childFields: Map<string, DiscoveredStructureField>;
+  }
+  const structures = new Map<string, MutableStructure>();
+  let visited = 0;
+  const safeStructuralPath = (path: string) => path.split(".").every(part => {
+    const name = part.replace(/\[\]/g, "");
+    return safePathSegment(name) && !sensitiveName.test(name);
+  });
+  const addStructure = (path: string, kind: "object" | "array", itemCount = 0): MutableStructure | undefined => {
+    if ((!supportedPath(path) && !path.includes("[]")) || !safeStructuralPath(path)) return undefined;
+    let structure = structures.get(path);
+    if (!structure && structures.size < MAX_DISCOVERY_STRUCTURES) {
+      structure = { path, kind, sampleCount: 0, itemCount: 0, childFields: new Map() };
+      structures.set(path, structure);
+    }
+    if (structure && structure.kind === kind) {
+      structure.sampleCount += 1;
+      structure.itemCount += itemCount;
+      return structure;
+    }
+    return undefined;
+  };
+  const addChildField = (structure: MutableStructure, path: string, value: unknown) => {
+    if (structure.childFields.size >= MAX_STRUCTURE_CHILD_FIELDS || !safeStructuralPath(path)) return;
+    const valueType = discoveredValueType(value, csv);
+    const possibleTarget = possibleTargetForStructureField(path, valueType);
+    const existing = structure.childFields.get(path);
+    if (!existing || existing.valueType !== valueType) {
+      structure.childFields.set(path, {
+        path,
+        valueType: existing ? "mixed" : valueType,
+        ...(possibleTarget ? { possibleTarget } : {}),
+      });
+    }
+  };
+  const visit = (value: unknown, path: string, depth: number) => {
+    visited += 1;
+    if (visited > MAX_STRUCTURE_NODES || depth > MAX_DISCOVERY_DEPTH || structures.size >= MAX_DISCOVERY_STRUCTURES) return;
+    if (isRecord(value)) {
+      const structure = addStructure(path, "object");
+      if (!structure) return;
+      for (const [key, child] of Object.entries(value)) {
+        if (!safePathSegment(key) || sensitiveName.test(key)) continue;
+        if (structure.childFields.size >= MAX_STRUCTURE_CHILD_FIELDS) break;
+        const childPath = `${path}.${key}`;
+        addChildField(structure, childPath, child);
+        if (isRecord(child) || Array.isArray(child)) visit(child, childPath, depth + 1);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      const structure = addStructure(path, "array", value.length);
+      if (!structure) return;
+      for (const item of value.slice(0, MAX_PREVIEW_RECORDS)) {
+        if (isRecord(item)) {
+          for (const [key, child] of Object.entries(item)) {
+            if (!safePathSegment(key) || sensitiveName.test(key)) continue;
+            if (structure.childFields.size >= MAX_STRUCTURE_CHILD_FIELDS) break;
+            const childPath = `${path}[].${key}`;
+            addChildField(structure, childPath, child);
+            if (isRecord(child) || Array.isArray(child)) visit(child, childPath, depth + 1);
+          }
+        } else {
+          addChildField(structure, `${path}[]`, item);
+        }
+      }
+    }
+  };
+
+  for (const record of records) {
+    for (const [key, value] of Object.entries(record)) {
+      if (safePathSegment(key) && !sensitiveName.test(key) && (isRecord(value) || Array.isArray(value))) {
+        visit(value, key, 1);
+      }
+    }
+  }
+
+  return [...structures.values()].map(structure => {
+    const childFields = [...structure.childFields.values()].sort((left, right) => left.path.localeCompare(right.path));
+    const meaning = structureMeaning(structure.path, structure.kind, childFields);
+    return {
+      path: structure.path,
+      kind: structure.kind,
+      sampleCount: structure.sampleCount,
+      itemCount: structure.itemCount,
+      childFields,
+      possibleMeaning: meaning.meaning,
+      confidenceScore: meaning.confidenceScore,
+      note: meaning.note,
+    };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+}
+
 function definitionFor(suggestions: SuggestedFieldMapping[]) {
   const path = (field: SuggestedTargetField) => suggestions.find(item => item.target === field)?.sourcePath ?? undefined;
   const payload: Record<string, string> = {};
-  for (const field of ["message", "severity", "errorCode"] as const) {
+  for (const field of SUGGESTED_PAYLOAD_TARGETS) {
     const sourcePath = path(field);
     if (sourcePath) payload[field] = sourcePath;
   }
@@ -367,8 +673,10 @@ export function buildDiscoveryResult(
   }
   const selected = selectedRecordPath ? candidates.find(candidate => candidate.path === selectedRecordPath) : undefined;
   const records = selected?.rows.slice(0, MAX_PREVIEW_RECORDS) ?? [];
-    const fields = collectLeafFields(records, sourceType === "csv_file");
-  const suggestions = makeSuggestions(fields);
+  const inspectedFields = collectLeafFields(records, sourceType === "csv_file");
+  const fields: DiscoveredField[] = inspectedFields.map(({ path, valueType, examples }) => ({ path, valueType, examples }));
+  const suggestions = makeSuggestions(inspectedFields, records.length);
+  const structures = collectStructures(records, sourceType === "csv_file");
   const warnings: string[] = [];
   if (truncated) warnings.push("Discovery reached a safety limit or found mixed record arrays. Some content is not shown.");
   if (nestedArrays) warnings.push("Nested arrays inside sample records are not flattened automatically. Review their structure before mapping.");
@@ -376,10 +684,23 @@ export function buildDiscoveryResult(
   if (candidates.length > 1 && !selectedRecordPath) warnings.push("Choose a record collection before reviewing its fields.");
   if (!candidates.length) warnings.push("No array of records was found. Check the response structure or select a supported JSON/CSV file.");
   if (fields.length >= MAX_DISCOVERY_FIELDS) warnings.push("The field preview was capped; remaining fields are preserved in the original record payload.");
+  if (structures.some(structure => structure.kind === "array")) {
+    warnings.push("Nested arrays are summarized for review, not flattened into event fields. Imports retain their original structure.");
+  }
   if (fields.length) warnings.push("Sensitive-looking field values are hidden in examples. Unmapped source fields remain in each imported event payload.");
   const preview = toPreview(records, fields, suggestions);
   return {
-    result: { sourceType: sourceType as DataSourceDiscoveryResult["sourceType"], sampledPageCount: 1, recordPaths, selectedRecordPath, fields, suggestions, preview, warnings },
+    result: {
+      sourceType: sourceType as DataSourceDiscoveryResult["sourceType"],
+      sampledPageCount: 1,
+      recordPaths,
+      selectedRecordPath,
+      fields,
+      suggestions,
+      structures,
+      preview,
+      warnings,
+    },
     selectedRows: records,
   };
 }

@@ -119,6 +119,89 @@ test("shared recognition uses industrial aliases and timezone-aware value eviden
   assert.equal(csv.fields.find(field => field.path === "alarm_datetime")?.valueType, "datetime");
 });
 
+test("shared industrial recognition preselects only safe matches across REST, JSON, and CSV", () => {
+  const json = buildDiscoveryResult("json_file", {
+    envelope: {
+      records: [{
+        incidentType: "bearing_overheat",
+        timestampUtc: "2026-11-01T12:00:00Z",
+        recordId: "event-17",
+        equipmentName: "Press 7",
+        operatingState: "running",
+        measurementName: "bearing_temperature",
+        measurementValue: 82.4,
+        measurementUnit: "degC",
+        measurements: [{ metricName: "vibration", measuredValue: 4.2, unitOfMeasure: "mm/s" }],
+        relationships: [{ relationType: "part_of", targetId: "line-2" }],
+        sourceMetadata: { gateway: { channel: "A" } },
+      }],
+    },
+  }, "envelope.records").result;
+  const rest = buildDiscoveryResult("rest_api", {
+    eventData: [{
+      incidentType: "bearing_overheat",
+      timestampUtc: "2026-11-01T12:00:00Z",
+      recordId: "event-17",
+      equipmentName: "Press 7",
+      operatingState: "running",
+      measurementName: "bearing_temperature",
+      measurementValue: 82.4,
+      measurementUnit: "degC",
+    }],
+  }).result;
+  const csv = buildDiscoveryResult(
+    "csv_file",
+    "incident_type,timestamp_utc,record_id,equipment_name,operating_state,measurement_name,measurement_value,measurement_unit\n" +
+      "bearing_overheat,2026-11-01T12:00:00Z,event-17,Press 7,running,bearing_temperature,82.4,degC\n",
+  ).result;
+
+  for (const result of [json, rest, csv]) {
+    const occurrence = result.suggestions.find(item => item.target === "occurredAt");
+    assert.equal(occurrence?.sourcePath, result.sourceType === "csv_file" ? "timestamp_utc" : "timestampUtc");
+    assert.equal(occurrence?.confidence, "high");
+    assert.equal(occurrence?.ambiguous, false);
+  }
+  assert.equal(json.suggestions.find(item => item.target === "eventType")?.sourcePath, "incidentType");
+  assert.equal(rest.suggestions.find(item => item.target === "eventType")?.sourcePath, "incidentType");
+  assert.equal(csv.suggestions.find(item => item.target === "eventType")?.sourcePath, "incident_type");
+  assert.equal(json.suggestions.find(item => item.target === "measurementValue")?.sourcePath, "measurementValue");
+  assert.equal(json.suggestions.find(item => item.target === "status")?.sourcePath, "operatingState");
+  assert.equal(json.suggestions.find(item => item.target === "sourceMetadata")?.sourcePath, "sourceMetadata");
+  assert.equal(json.suggestions.find(item => item.target === "relationships")?.sourcePath, "relationships");
+  assert.equal(json.suggestions.find(item => item.target === "measurements")?.sourcePath, "measurements");
+
+  const measurementStructure = json.structures.find(structure => structure.path === "measurements");
+  assert.equal(measurementStructure?.possibleMeaning, "measurements");
+  assert.ok(measurementStructure?.childFields.some(field =>
+    field.path === "measurements[].metricName" && field.possibleTarget === "measurementName"));
+  assert.equal(json.fields.some(field => field.path === "measurements[].metricName"), false,
+    "array members must not be flattened into mappable scalar fields");
+  assert.ok(json.warnings.some(warning => warning.includes("not flattened")));
+});
+
+test("low-confidence, placeholder, and ambiguous candidates remain unselected", () => {
+  const result = buildDiscoveryResult("json_file", {
+    records: [{
+      type: "N/A",
+      timestamp: "2026-11-01T12:00:00",
+      value: "unknown",
+    }],
+  }).result;
+  assert.equal(result.suggestions.find(item => item.target === "eventType")?.sourcePath, null);
+  assert.notEqual(result.suggestions.find(item => item.target === "eventType")?.confidence, "high");
+  assert.equal(result.suggestions.find(item => item.target === "occurredAt")?.sourcePath, null,
+    "a timestamp without timezone evidence must not be preselected");
+  const ambiguous = buildDiscoveryResult("json_file", {
+    records: [{
+      eventType: "state_changed",
+      faultType: "low_pressure",
+      occurredAt: "2026-11-01T12:00:00Z",
+    }],
+  }).result;
+  assert.equal(ambiguous.suggestions.find(item => item.target === "eventType")?.ambiguous, true);
+  assert.equal(ambiguous.suggestions.find(item => item.target === "eventType")?.sourcePath, null);
+});
+
 test("explicit REST discovery samples at most three configured pages and merges their fields", async () => {
   const offsets: number[] = [];
   const remote = createServer((request, response) => {
@@ -162,7 +245,10 @@ test("explicit REST discovery samples at most three configured pages and merges 
     assert.deepEqual(offsets, [0, 2, 4], "discovery must stop at the three-page cap");
     assert.equal(sample.sampledPageCount, 3);
     assert.equal(result.recordPaths[0]?.recordCount, 6);
-    assert.equal(result.suggestions.find(item => item.target === "errorCode")?.sourcePath, "diagnosticCode");
+    const errorCodeSuggestion = result.suggestions.find(item => item.target === "errorCode");
+    assert.equal(errorCodeSuggestion?.sourcePath, null, "a field present in only one sampled record must not be preselected");
+    assert.ok(errorCodeSuggestion?.alternatives.includes("diagnosticCode"));
+    assert.match(errorCodeSuggestion?.note ?? "", /1 of 5 sampled records/);
   } finally {
     await new Promise<void>(resolve => remote.close(() => resolve()));
   }

@@ -167,7 +167,26 @@ export interface DataSourceRecord {
 
 export type DiscoveredValueType = "string" | "number" | "boolean" | "datetime" | "object" | "array" | "mixed" | "unknown";
 export type MappingConfidence = "high" | "medium" | "low";
-export type SuggestedTargetField = "eventType" | "occurredAt" | "sourceRecordId" | "assetKey" | "message" | "severity" | "errorCode";
+export const SUGGESTED_PAYLOAD_TARGETS = [
+  "message",
+  "severity",
+  "errorCode",
+  "assetName",
+  "status",
+  "measurementName",
+  "measurementValue",
+  "measurementUnit",
+  "measurements",
+  "relationships",
+  "sourceMetadata",
+] as const;
+export type SuggestedPayloadTargetField = typeof SUGGESTED_PAYLOAD_TARGETS[number];
+export type SuggestedTargetField =
+  | "eventType"
+  | "occurredAt"
+  | "sourceRecordId"
+  | "assetKey"
+  | SuggestedPayloadTargetField;
 
 export interface DiscoveredField {
   path: string;
@@ -193,6 +212,30 @@ export interface SuggestedFieldMapping {
   note: string;
 }
 
+export type DiscoveryStructureMeaning =
+  | "event-records"
+  | "measurements"
+  | "relationships"
+  | "source-metadata"
+  | "unknown";
+
+export interface DiscoveredStructureField {
+  path: string;
+  valueType: DiscoveredValueType;
+  possibleTarget?: SuggestedTargetField;
+}
+
+export interface DiscoveredStructure {
+  path: string;
+  kind: "object" | "array";
+  sampleCount: number;
+  itemCount: number;
+  childFields: DiscoveredStructureField[];
+  possibleMeaning: DiscoveryStructureMeaning;
+  confidenceScore: number;
+  note: string;
+}
+
 export interface DiscoveryAssetMatch {
   status: "matched" | "unmatched" | "ambiguous";
   confidence: number;
@@ -215,6 +258,7 @@ export interface DataSourceDiscoveryResult {
   selectedRecordPath: string | null;
   fields: DiscoveredField[];
   suggestions: SuggestedFieldMapping[];
+  structures: DiscoveredStructure[];
   preview: DiscoveryPreviewRecord[];
   warnings: string[];
 }

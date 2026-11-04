@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { DATA_SOURCE_TYPES, type DataSourceConfigurationInput, type DataSourceDiscoveryResult, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page, type RestApiAuthMode, type RestPaginationConfiguration, type RestSyncResult, type SuggestedTargetField } from "@kudu/shared";
+import { DATA_SOURCE_TYPES, SUGGESTED_PAYLOAD_TARGETS, type DataSourceConfigurationInput, type DataSourceDiscoveryResult, type DataSourceEventMapping, type DataSourceRecord, type DataSourceType, type EventMappingDefinition, type FileImportResult, type Page, type RestApiAuthMode, type RestPaginationConfiguration, type RestSyncResult, type SuggestedTargetField } from "@kudu/shared";
 import { activateDataSourceEventMapping, ApiError, createDataSource, createDataSourceEventMapping, deleteDataSource, discoverDataSource, getDataSource, importDataSourceFile, listDataSourceEventMappings, listDataSources, listRestSyncRuns, resumeRestSyncRun, syncRestDataSource, updateDataSource, updateDataSourceEventMapping, validateDataSourceEventMapping } from "../api";
 import { ConnectorBadge, displayError, EmptyState, ErrorState, Field, formatDate, ListPagination, LoadingState, PageIntro } from "../components/RegistryUI";
 
@@ -19,6 +19,14 @@ const suggestionLabels: Record<SuggestedTargetField, string> = {
   message: "Message",
   severity: "Severity",
   errorCode: "Error code",
+  assetName: "Asset name",
+  status: "Asset or event state",
+  measurementName: "Measurement name",
+  measurementValue: "Measurement value",
+  measurementUnit: "Measurement unit",
+  measurements: "Measurement group",
+  relationships: "Relationships",
+  sourceMetadata: "Source metadata",
 };
 
 function mapDataSourceErrors(fields: Record<string, string>): Record<string, string> {
@@ -608,7 +616,7 @@ function DiscoveryReview({
     } else if (assetPath && assetValue !== "(missing)" && assetValue !== undefined && assetValue !== "null") {
       issues.push("Asset key must be a string or finite number."); invalid = true;
     }
-    for (const target of ["message", "severity", "errorCode"] as const) {
+    for (const target of SUGGESTED_PAYLOAD_TARGETS) {
       const path = mappingPaths[target];
       const value = path ? row.values[path] : undefined;
       if (path && value === "(missing)") { issues.push(`Mapped ${target} field is missing.`); invalid = true; }
@@ -662,6 +670,39 @@ function DiscoveryReview({
       </select>
     </label>
     {result.warnings.map((warning, index) => <p className="field-hint" key={`${index}-${warning}`} data-testid="text-discovery-warning">{warning}</p>)}
+    {selected && result.structures.length > 0 && <section className="panel" data-testid="panel-discovery-structures">
+      <h3 className="panel-title">Nested structure inspection</h3>
+      <p className="field-hint">Objects and arrays are inspected within bounded samples. Array members remain intact; structure hints do not map or import them automatically.</p>
+      <div className="table-frame discovery-fields"><table>
+        <thead><tr><th>Path and shape</th><th>Possible meaning</th><th>Observed child fields</th></tr></thead>
+        <tbody>{result.structures.map(structure => <tr key={`${structure.path}:${structure.kind}`} data-testid="row-discovery-structure">
+          <td>
+            <span className="mono">{structure.path}</span>
+            <p className="field-hint">
+              {structure.kind === "array"
+                ? `Array · ${structure.sampleCount} sampled occurrence${structure.sampleCount === 1 ? "" : "s"} · ${structure.itemCount} item${structure.itemCount === 1 ? "" : "s"}`
+                : `Object · ${structure.sampleCount} sampled occurrence${structure.sampleCount === 1 ? "" : "s"}`}
+            </p>
+          </td>
+          <td>
+            {structure.possibleMeaning === "unknown"
+              ? "Unclassified"
+              : structure.possibleMeaning.replace("-", " ")}
+            {structure.confidenceScore > 0 && <span className="field-hint"> · {Math.round(structure.confidenceScore * 100)}% clue</span>}
+            <p className="field-hint">{structure.note}</p>
+          </td>
+          <td>{structure.childFields.length
+            ? structure.childFields.map(field => (
+              <div key={field.path}>
+                <span className="mono">{field.path}</span> · {field.valueType}
+                {field.possibleTarget && <span className="field-hint"> · possible {suggestionLabels[field.possibleTarget]} by field name</span>}
+              </div>
+            ))
+            : <span className="muted">No object fields in the bounded sample</span>}
+          </td>
+        </tr>)}</tbody>
+      </table></div>
+    </section>}
     {selected && result.fields.length > 0 && <>
       <div className="table-frame discovery-fields"><table>
         <thead><tr><th>Mapping target</th><th>Source field</th><th>Confidence</th><th>Examples and review note</th></tr></thead>
@@ -681,6 +722,7 @@ function DiscoveryReview({
           <td>{suggestion.examples.join(" · ") || <span className="muted">No example</span>}<p className="field-hint">{suggestion.note}</p></td>
         </tr>)}</tbody>
       </table></div>
+      <p className="field-hint">Only high-confidence, unambiguous matches with adequate sample coverage are preselected. Medium-confidence fields remain for operator review.</p>
       <div className="discovery-preview-records" data-testid="list-discovery-preview-records">
         <h3>Sample records · first {result.preview.length} of {selected.recordCount}{result.sourceType === "rest_api" ? ` across ${result.sampledPageCount} page${result.sampledPageCount === 1 ? "" : "s"}` : ""}</h3>
         {result.preview.map(row => {
@@ -864,6 +906,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       selectedRecordPath: path || null,
       fields: [],
       suggestions: [],
+      structures: [],
       preview: [],
       warnings: path ? ["Run discovery again to preview this collection."] : ["Choose a record collection."],
     } : current);
@@ -881,27 +924,44 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       }
       const definition = active.definition as unknown as EventMappingDefinition;
       const availablePaths = new Set(discovery.fields.map(field => field.path));
-      const eventTypePath = definition.eventType;
-      const occurredAtPath = definition.occurredAt;
-      if (
-        !eventTypePath || !occurredAtPath ||
-        !availablePaths.has(eventTypePath) || !availablePaths.has(occurredAtPath)
-      ) {
-        setMappingTemplateMessage("The required fields from that mapping are not present in this discovery sample. No mapping was applied.");
-        return;
-      }
-      const copied: Record<string, string> = {
-        eventType: eventTypePath,
-        occurredAt: occurredAtPath,
+      const copied: Record<string, string> = {};
+      const safeCompatiblePath = (target: SuggestedTargetField, approvedPath?: string): string | undefined => {
+        if (approvedPath && availablePaths.has(approvedPath)) return approvedPath;
+        const suggestion = discovery.suggestions.find(item => item.target === target);
+        return suggestion?.confidence === "high" && !suggestion.ambiguous && suggestion.sourcePath
+          ? suggestion.sourcePath
+          : undefined;
       };
-      if (definition.sourceRecordId && availablePaths.has(definition.sourceRecordId)) copied.sourceRecordId = definition.sourceRecordId;
-      if (definition.assetKey && availablePaths.has(definition.assetKey)) copied.assetKey = definition.assetKey;
-      for (const target of ["message", "severity", "errorCode"] as const) {
-        const path = definition.payload?.[target];
-        if (path && availablePaths.has(path)) copied[target] = path;
+      const eventTypePath = safeCompatiblePath("eventType", definition.eventType);
+      const occurredAtPath = safeCompatiblePath("occurredAt", definition.occurredAt);
+      if (eventTypePath) copied.eventType = eventTypePath;
+      if (occurredAtPath) copied.occurredAt = occurredAtPath;
+      if (definition.sourceRecordId) {
+        const path = safeCompatiblePath("sourceRecordId", definition.sourceRecordId);
+        if (path) copied.sourceRecordId = path;
+      }
+      if (definition.assetKey) {
+        const path = safeCompatiblePath("assetKey", definition.assetKey);
+        if (path) copied.assetKey = path;
+      }
+      for (const [target, approvedPath] of Object.entries(definition.payload ?? {})) {
+        const suggestedTarget = (SUGGESTED_PAYLOAD_TARGETS as readonly string[]).includes(target)
+          ? target as SuggestedTargetField
+          : undefined;
+        const path = suggestedTarget
+          ? safeCompatiblePath(suggestedTarget, approvedPath)
+          : availablePaths.has(approvedPath) ? approvedPath : undefined;
+        if (path) copied[target] = path;
       }
       setMappingPaths(copied);
-      setMappingTemplateMessage(`Copied active mapping version ${active.version}. Review it as a draft; it is not activated automatically.`);
+      const requiredNeedsReview = !copied.eventType || !copied.occurredAt;
+      setMappingTemplateMessage(
+        `Copied active mapping version ${active.version}. ` +
+        (requiredNeedsReview
+          ? "Required fields without an exact or high-confidence compatible match still need selection."
+          : "Exact paths were reused and compatible high-confidence fields were matched across formats.") +
+        " Review it as a draft; it is not activated automatically.",
+      );
     } catch (cause) {
       setMappingTemplateMessage(displayError(cause));
     } finally {
@@ -1061,7 +1121,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         const occurredAt = selected("occurredAt");
         if (eventType && occurredAt) {
           const payload: Record<string, string> = {};
-          for (const target of ["message", "severity", "errorCode"] as const) {
+          for (const target of SUGGESTED_PAYLOAD_TARGETS) {
             const path = selected(target);
             if (path) payload[target] = path;
           }

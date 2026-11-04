@@ -61,16 +61,20 @@ test(
     const importsDirectory = join(temporaryDirectory, "imports");
     await mkdir(importsDirectory);
     await writeFile(join(importsDirectory, "reuse.json"), JSON.stringify([{
-      sourceRecordId: "browser-json-1",
-      eventType: "machine_fault",
-      occurredAt: "2026-11-03T13:00:00Z",
+      occurrenceId: "browser-json-1",
+      alarmName: "machine_fault",
+      eventTime: "2026-11-03T13:00:00Z",
       reading: 42,
+      operatingState: "running",
+      readings: [{ metricName: "bearing_temperature", measurementValue: 42, measurementUnit: "degC" }],
     }]));
     const data = Array.from({ length: 8 }, (_, index) => ({
       sourceRecordId: `browser-${index + 1}`,
       eventType: "machine_fault",
       occurredAt: `2026-11-03T12:00:${String(index).padStart(2, "0")}Z`,
       reading: index + 1,
+      status: "running",
+      measurements: [{ metricName: "bearing_temperature", measurementValue: index + 1, measurementUnit: "degC" }],
     }));
     const requestedOffsets: number[] = [];
     const fixture = createServer((request, response) => {
@@ -241,6 +245,22 @@ test(
     await waitFor("saved source discovery screen", "Boolean(document.querySelector('[data-testid=\"section-discover-data\"]'))");
     await click('[data-testid="button-discover-source"]');
     await waitFor("discovery fields", "Boolean(document.querySelector('[data-testid=\"select-discovery-map-eventType\"]'))");
+    await waitFor("nested structure preview", "Boolean(document.querySelector('[data-testid=\"panel-discovery-structures\"]'))");
+    const initialSuggestions = await evaluate(`JSON.stringify({
+      eventType: document.querySelector('[data-testid="select-discovery-map-eventType"]')?.value,
+      occurredAt: document.querySelector('[data-testid="select-discovery-map-occurredAt"]')?.value,
+      sourceRecordId: document.querySelector('[data-testid="select-discovery-map-sourceRecordId"]')?.value,
+      measurementValue: document.querySelector('[data-testid="select-discovery-map-measurementValue"]')?.value
+    })`);
+    assert.deepEqual(JSON.parse(initialSuggestions), {
+      eventType: "eventType",
+      occurredAt: "occurredAt",
+      sourceRecordId: "sourceRecordId",
+      measurementValue: "reading",
+    });
+    const nestedStructureSummary = await evaluate("document.querySelector('[data-testid=\"panel-discovery-structures\"]')?.innerText ?? ''");
+    assert.match(nestedStructureSummary, /measurements/);
+    assert.match(nestedStructureSummary, /possible Measurement name/);
     const sampleSummary = await evaluate("document.querySelector('[data-testid=\"list-discovery-preview-records\"]')?.innerText ?? ''");
     assert.match(sampleSummary, /across 3 pages/, "the browser shows that discovery used a bounded multi-page sample");
     await setValue('[data-testid="select-discovery-map-eventType"]', "eventType");
@@ -303,9 +323,9 @@ test(
       sourceRecordId: document.querySelector('[data-testid="select-discovery-map-sourceRecordId"]')?.value
     })`);
     assert.deepEqual(JSON.parse(copiedPaths), {
-      eventType: "eventType",
-      occurredAt: "occurredAt",
-      sourceRecordId: "sourceRecordId",
+      eventType: "alarmName",
+      occurredAt: "eventTime",
+      sourceRecordId: "occurrenceId",
     });
     await click('[data-testid="button-submit-data-source"]');
     await waitFor("saved JSON source mapping draft", "Boolean(document.querySelector('[data-testid=\"mapping-draft-editor\"]'))");
@@ -315,7 +335,16 @@ test(
       .where("source_id", "=", reusedSourceId)
       .executeTakeFirst();
     assert.equal(reusedMapping?.status, "draft", "reusing an approved mapping must not auto-activate it");
-    assert.ok(JSON.stringify(reusedMapping?.definition).includes("sourceRecordId"));
+    assert.deepEqual(reusedMapping?.definition, {
+      eventType: "alarmName",
+      occurredAt: "eventTime",
+      sourceRecordId: "occurrenceId",
+      payload: {
+        measurementValue: "reading",
+        status: "operatingState",
+        measurements: "readings",
+      },
+    });
 
     const sourceId = await evaluate("window.location.pathname.split('/').filter(Boolean).at(-1) ?? ''");
     const sourceRecord = await manager.db.selectFrom("data_sources").select("id").where("id", "=", sourceId).executeTakeFirst();

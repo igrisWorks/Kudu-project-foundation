@@ -63,7 +63,14 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
       response.end(JSON.stringify({ items: [{ record: "recovered-1", type: "recovered", time: "2026-11-01T15:00:00Z", reading: 30 }] }));
       return;
     }
-    response.end(JSON.stringify({ items: [{ record: "rest-1", type: "temperature", time: "2026-11-01T12:00:00Z", reading: 42 }] }));
+    response.end(JSON.stringify({ items: [{
+      record: "rest-1",
+      type: "temperature",
+      time: "2026-11-01T12:00:00Z",
+      reading: 42,
+      state: "running",
+      payload: { measurements: [{ metricName: "temperature", measurementValue: 42, measurementUnit: "degC" }] },
+    }] }));
   });
   await new Promise<void>(resolve => remote.listen(0, "127.0.0.1", resolve));
   const address = remote.address() as { port: number };
@@ -108,28 +115,55 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
     const filtered = await call("GET", "/api/v1/events?from=2026-11-01T12%3A00%3A00.123456Z&to=2026-11-01T12%3A00%3A00.123456Z");
     assert.equal(filtered.total, 1);
 
-    const mapping = async (sourceId: string, assetKey?: string) => {
+    const mapping = async (
+      sourceId: string,
+      assetKey?: string,
+      payloadMappings: Record<string, string> = { reading: "reading" },
+    ) => {
       await call("POST", `/api/v1/data-sources/${sourceId}/mappings`, { definition: {
         eventType: "type", occurredAt: "time", sourceRecordId: "record",
         ...(assetKey ? { assetKey } : {}),
-        payload: { reading: "reading" },
+        payload: payloadMappings,
       } });
       await call("POST", `/api/v1/data-sources/${sourceId}/mappings/1/validate`, undefined, 200);
       await call("POST", `/api/v1/data-sources/${sourceId}/mappings/1/activate`, undefined, 200);
       assert.equal((await call("GET", `/api/v1/data-sources/${sourceId}/mappings`)).items[0].status, "active");
     };
+    const mappedIndustrialPayload = {
+      measurementValue: "reading",
+      status: "state",
+      measurements: "payload.measurements",
+    };
+    const nestedMeasurements = [{ metricName: "temperature", measurementValue: 31, measurementUnit: "degC" }];
     for (const format of ["json", "csv"] as const) {
       const fileName = `readings.${format}`;
-      await writeFile(join(imports, fileName), format === "json"
-        ? JSON.stringify([{ record: "json-1", type: "temperature", time: "2026-11-01T12:00:00Z", reading: 31 }])
-        : "record,type,time,reading\ncsv-1,temperature,2026-11-01T12:00:00Z,32\n");
+      const fileContents = format === "json"
+        ? JSON.stringify([{
+          record: "json-1",
+          type: "temperature",
+          time: "2026-11-01T12:00:00Z",
+          reading: 31,
+          state: "running",
+          payload: { measurements: nestedMeasurements },
+        }])
+        : [
+          "record,type,time,reading,state,payload",
+          `csv-1,temperature,2026-11-01T12:00:00Z,32,running,"${JSON.stringify({ measurements: nestedMeasurements }).replaceAll('"', '""')}"`,
+        ].join("\n");
+      await writeFile(join(imports, fileName), fileContents);
       const source = await call("POST", "/api/v1/data-sources", {
         sourceKey: format, displayName: format, sourceType: `${format}_file`,
         configuration: { kind: `${format}_file`, relativePath: fileName },
       });
-      await mapping(source.id);
+      await mapping(source.id, undefined, mappedIndustrialPayload);
       const imported = await call("POST", `/api/v1/data-sources/${source.id}/import`, undefined, 200);
       assert.equal(imported.imported, 1, JSON.stringify(imported));
+      const fileEvents = await call("GET", `/api/v1/events?sourceKey=${format}`);
+      const fileEvent = await call("GET", `/api/v1/events/${fileEvents.items[0].id}`);
+      assert.equal(fileEvent.payload.status, "running");
+      assert.equal(fileEvent.payload.measurementValue, format === "json" ? 31 : "32");
+      assert.deepEqual(fileEvent.payload.measurements, nestedMeasurements);
+      assert.deepEqual(fileEvent.provenance.originalRecord.payload.measurements, nestedMeasurements);
     }
     const restConfig = {
       kind: "rest_api",
@@ -148,10 +182,18 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
     const rest = await call("POST", "/api/v1/data-sources", {
       sourceKey: "rest", displayName: "REST", sourceType: "rest_api", configuration: restConfig,
     });
-    await mapping(rest.id);
+    await mapping(rest.id, undefined, mappedIndustrialPayload);
     const synced = await call("POST", `/api/v1/data-sources/${rest.id}/sync`, undefined, 200);
     assert.equal(synced.imported, 1, JSON.stringify(synced));
     assert.equal((await call("GET", `/api/v1/data-sources/${rest.id}`)).sourceKey, "rest");
+    const restEvents = await call("GET", "/api/v1/events?sourceKey=rest");
+    const restEvent = await call("GET", `/api/v1/events/${restEvents.items[0].id}`);
+    assert.equal(restEvent.payload.status, "running");
+    assert.equal(restEvent.payload.measurementValue, 42);
+    assert.deepEqual(restEvent.payload.measurements, [
+      { metricName: "temperature", measurementValue: 42, measurementUnit: "degC" },
+    ]);
+    assert.deepEqual(restEvent.provenance.originalRecord.payload.measurements, restEvent.payload.measurements);
     const paged = await call("POST", "/api/v1/data-sources", {
       sourceKey: "paged", displayName: "Paged REST", sourceType: "rest_api", enabled: true,
       configuration: {
