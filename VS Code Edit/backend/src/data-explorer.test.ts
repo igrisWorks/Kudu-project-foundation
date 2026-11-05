@@ -94,7 +94,7 @@ test("the explorer filters persisted events and exports complete attribution and
   assert.equal(secondPage.statusCode, 200, secondPage.body);
   assert.equal(secondPage.json().total, 50);
   assert.equal(secondPage.json().items.length, 7);
-  assert.equal(secondPage.json().items[0].sourceRecordId, "cycle-6");
+  assert.equal(secondPage.json().items[0].sourceRecordId, "cycle-7");
 
   const quality = await app.inject({
     method: "GET",

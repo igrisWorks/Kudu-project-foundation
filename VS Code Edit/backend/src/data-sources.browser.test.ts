@@ -452,9 +452,15 @@ test(
     await waitFor("data explorer page", `document.querySelector('h1')?.innerText === 'Data explorer'`);
     await waitFor("persisted event rows", `Boolean(document.querySelector('[data-testid^="button-select-event-"]'))`);
     await waitFor("payload tree inspector", `Boolean(document.querySelector('[data-testid="tree-event-payload"]'))`);
-    await waitFor("nested object child table", `Boolean(document.querySelector('[data-testid="related-record-tables"]'))`);
     await waitFor("selected field export controls", `Boolean(document.querySelector('[data-testid="button-export-selected-fields"]'))`);
     assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="select-explorer-sort-by"]'))`));
+    const nestedRecordButton = await evaluate(`(() => {
+      const row = [...document.querySelectorAll('.dw-event-table tbody tr')].find(item => item.innerText.includes('Browser Milestone 2 Fixture'));
+      return row?.querySelector('button[data-testid^="button-select-event-"]')?.getAttribute('data-testid') ?? null;
+    })()`);
+    assert.ok(nestedRecordButton, "the browser fixture with nested measurement records must be present");
+    await click(`[data-testid="${nestedRecordButton}"]`);
+    await waitFor("nested object child table", `Boolean(document.querySelector('[data-testid="related-record-tables"]'))`);
     const explorerSummary = await evaluate(`document.querySelector('.dw-event-table')?.innerText ?? ''`);
     assert.ok(explorerSummary.trim().length > 20, "the table renders persisted event values and source attribution");
     assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="explorer-quality-report"]'))`));

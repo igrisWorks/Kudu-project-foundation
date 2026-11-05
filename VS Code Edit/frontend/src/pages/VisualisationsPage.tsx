@@ -206,7 +206,11 @@ export default function VisualisationsPage() {
   };
 
   const saveConfiguration = () => {
-    if (!name.trim() || !sourceId || !eventType || !valuePath) return;
+    if (
+      !name.trim() || !sourceId || !eventType ||
+      (visualisationType === "line" && !valuePath) ||
+      ((visualisationType === "bar" || visualisationType === "distribution") && !categoryPath)
+    ) return;
     const existing = saved.find((item) => item.id === activeId);
     const config: SavedVisualisation = {
       id: activeId || makeId(),
