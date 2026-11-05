@@ -177,7 +177,93 @@ function mappingRecordFailure(message: string, fields?: Record<string, string>):
   return new ApiFailure(400, "INVALID_IMPORT_RECORD", message, fields);
 }
 
-export function normalizeOccurrenceTimestamp(value: unknown): string | undefined {
+const timezoneFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatterForTimezone(timezone: string): Intl.DateTimeFormat {
+  let formatter = timezoneFormatters.get(timezone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+    timezoneFormatters.set(timezone, formatter);
+  }
+  return formatter;
+}
+
+function normalizeLocalTimestamp(value: string, timezone: string): string | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?$/.exec(value);
+  if (!match) return undefined;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = ""] = match;
+  const wallParts = {
+    year: Number(yearText),
+    month: Number(monthText),
+    day: Number(dayText),
+    hour: Number(hourText),
+    minute: Number(minuteText),
+    second: Number(secondText),
+  };
+  const wallAsUtc = Date.UTC(
+    wallParts.year, wallParts.month - 1, wallParts.day,
+    wallParts.hour, wallParts.minute, wallParts.second,
+  );
+  const check = new Date(wallAsUtc);
+  if (
+    check.getUTCFullYear() !== wallParts.year ||
+    check.getUTCMonth() + 1 !== wallParts.month ||
+    check.getUTCDate() !== wallParts.day ||
+    wallParts.hour > 23 ||
+    wallParts.minute > 59 ||
+    wallParts.second > 59
+  ) return undefined;
+
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = formatterForTimezone(timezone);
+  } catch {
+    return undefined;
+  }
+  const millisecond = Number((fraction + "000").slice(0, 3));
+  const candidates = new Set<number>();
+  for (let hours = -36; hours <= 36; hours += 6) {
+    const sample = wallAsUtc + hours * 60 * 60 * 1000;
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(sample))
+        .filter(part => part.type !== "literal")
+        .map(part => [part.type, Number(part.value)]),
+    ) as Record<string, number>;
+    const displayedAsUtc = Date.UTC(
+      parts.year!, parts.month! - 1, parts.day!,
+      parts.hour!, parts.minute!, parts.second!,
+    );
+    const offset = displayedAsUtc - Math.floor(sample / 1000) * 1000;
+    const candidate = wallAsUtc - offset + millisecond;
+    const actual = Object.fromEntries(
+      formatter.formatToParts(new Date(candidate))
+        .filter(part => part.type !== "literal")
+        .map(part => [part.type, Number(part.value)]),
+    ) as Record<string, number>;
+    if (
+      actual.year === wallParts.year &&
+      actual.month === wallParts.month &&
+      actual.day === wallParts.day &&
+      actual.hour === wallParts.hour &&
+      actual.minute === wallParts.minute &&
+      actual.second === wallParts.second
+    ) candidates.add(candidate);
+  }
+  // Nonexistent spring-forward times have no candidate; fall-back times have
+  // two. Both require operator-provided disambiguation rather than guessing.
+  return candidates.size === 1 ? new Date([...candidates][0]!).toISOString() : undefined;
+}
+
+export function normalizeOccurrenceTimestamp(value: unknown, sourceTimezone?: string): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     const milliseconds = Math.abs(value) < 100_000_000_000 ? value * 1000 : value;
     const date = new Date(milliseconds);
@@ -191,7 +277,8 @@ export function normalizeOccurrenceTimestamp(value: unknown): string | undefined
     if (!Number.isNaN(date.getTime())) return date.toISOString();
   }
   const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2}|(?:UTC|GMT))$/i.test(input);
-  if (!hasTimezone || Number.isNaN(Date.parse(input))) return undefined;
+  if (!hasTimezone) return sourceTimezone ? normalizeLocalTimestamp(input, sourceTimezone) : undefined;
+  if (Number.isNaN(Date.parse(input))) return undefined;
   // Preserve RFC 3339 text (including sub-millisecond precision); normalize other
   // explicitly zoned common date formats to a value accepted by event ingestion.
   if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(input)) return input;
@@ -208,6 +295,7 @@ export async function normalizeMappedEvent(
   fallbackDeduplicationKey: string,
   provenance: JsonObject,
   assetMatchContext?: AssetMatchContext,
+  sourceTimezone?: string,
 ): Promise<JsonObject> {
   const { definition, version } = mapping;
   const eventType = readMappedField(rawRecord, definition.eventType!);
@@ -217,10 +305,10 @@ export async function normalizeMappedEvent(
       eventType: `Provide a value in the mapped source field ${definition.eventType}.`,
     });
   }
-  const normalizedOccurredAt = normalizeOccurrenceTimestamp(occurredAt);
+  const normalizedOccurredAt = normalizeOccurrenceTimestamp(occurredAt, sourceTimezone);
   if (!normalizedOccurredAt) {
     throw mappingRecordFailure("The mapped occurrence timestamp is missing or invalid.", {
-      occurredAt: `Provide a valid date/time or Unix timestamp in ${definition.occurredAt}.`,
+      occurredAt: `Provide a valid date/time or Unix timestamp in ${definition.occurredAt}; local times need a configured source time zone and an explicit offset at daylight-saving transitions.`,
     });
   }
 

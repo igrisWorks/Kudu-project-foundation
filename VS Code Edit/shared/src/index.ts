@@ -118,6 +118,7 @@ export type DataSourceConfigurationInput =
       authMode?: RestApiAuthMode;
       credentialRef?: string | null;
       trustedPrivateHost?: string;
+      sourceTimezone?: string;
       timeoutMs?: number;
       maxResponseBytes?: number;
       maxRecords?: number;
@@ -125,8 +126,8 @@ export type DataSourceConfigurationInput =
       recordsPath?: string;
       pagination?: RestPaginationConfiguration;
     }
-  | { kind: "json_file"; relativePath: string; recordsPath?: string }
-  | { kind: "csv_file"; relativePath: string }
+  | { kind: "json_file"; relativePath: string; recordsPath?: string; sourceTimezone?: string }
+  | { kind: "csv_file"; relativePath: string; sourceTimezone?: string }
   | { kind: "manual" };
 
 export type DataSourceConfigurationMetadata =
@@ -135,6 +136,7 @@ export type DataSourceConfigurationMetadata =
       baseUrl: string;
       credentialConfigured: boolean;
       trustedPrivateHost?: string;
+      sourceTimezone?: string;
       endpointPath?: string;
       method?: "GET";
       authMode?: RestApiAuthMode;
@@ -145,8 +147,8 @@ export type DataSourceConfigurationMetadata =
       recordsPath?: string;
       pagination?: RestPaginationConfiguration;
     }
-  | { kind: "json_file"; relativePath: string; recordsPath?: string }
-  | { kind: "csv_file"; relativePath: string }
+  | { kind: "json_file"; relativePath: string; recordsPath?: string; sourceTimezone?: string }
+  | { kind: "csv_file"; relativePath: string; sourceTimezone?: string }
   | { kind: "manual"; referenceOnly: true };
 
 export interface DataSourceRecord {
@@ -437,4 +439,47 @@ export interface EventListFilters {
   eventType?: string;
   from?: string;
   to?: string;
+}
+
+export interface ExplorerEventQuery {
+  sourceId?: string;
+  search?: string;
+  eventType?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: "occurredAt" | "eventType" | "source";
+  sortDirection?: "asc" | "desc";
+}
+
+export interface ExplorerQualityField {
+  path: string;
+  observedTypes: DiscoveredValueType[];
+  recordsPresent: number;
+  recordsMissing: number;
+}
+
+export interface ExplorerSchemaChange {
+  path: string;
+  change: "added" | "removed" | "type_changed";
+  previousTypes: DiscoveredValueType[];
+  currentTypes: DiscoveredValueType[];
+}
+
+export interface ExplorerSourceQuality {
+  source: EventSourceReference;
+  sampledEvents: number;
+  recentSampledEvents: number;
+  previousSampledEvents: number;
+  fields: ExplorerQualityField[];
+  schemaChanges: ExplorerSchemaChange[];
+  fieldsTruncated: boolean;
+  schemaChangesTruncated: boolean;
+  insufficientHistory: boolean;
+}
+
+export interface ExplorerQualityReport {
+  sources: ExplorerSourceQuality[];
+  sourcesTruncated: boolean;
 }

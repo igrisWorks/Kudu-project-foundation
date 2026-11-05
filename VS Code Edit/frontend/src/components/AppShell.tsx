@@ -19,12 +19,10 @@ export default function AppShell({
       <p className="brand-tagline">INDUSTRIAL DATA<br />UNIFIED NAMESPACE</p>
       <div className="rail-section-label">WORKSPACE</div>
       <nav className="primary-nav" aria-label="Primary navigation">
-        <Link href="/" aria-current={location === "/" ? "page" : undefined} data-testid="nav-home"><span className="nav-glyph" aria-hidden="true">01</span>Status</Link>
-        <Link href="/assets" aria-current={location.startsWith("/assets") ? "page" : undefined} data-testid="nav-assets"><span className="nav-glyph" aria-hidden="true">02</span>Assets</Link>
-        <Link href="/data-sources" aria-current={location.startsWith("/data-sources") ? "page" : undefined} data-testid="nav-data-sources"><span className="nav-glyph" aria-hidden="true">03</span>Data sources</Link>
-        <Link href="/events" aria-current={location.startsWith("/events") ? "page" : undefined} data-testid="nav-events"><span className="nav-glyph" aria-hidden="true">04</span>Events</Link>
-        <Link href="/namespace" aria-current={location === "/namespace" ? "page" : undefined} data-testid="nav-namespace"><span className="nav-glyph" aria-hidden="true">05</span>Unified Namespace</Link>
-        {localMode && <Link href="/settings" aria-current={location === "/settings" ? "page" : undefined} data-testid="nav-settings"><span className="nav-glyph" aria-hidden="true">06</span>Settings</Link>}
+        <Link href="/data-sources" aria-current={location.startsWith("/data-sources") ? "page" : undefined} data-testid="nav-data-sources">Data sources</Link>
+        <Link href="/data-explorer" aria-current={location.startsWith("/data-explorer") ? "page" : undefined} data-testid="nav-data-explorer">Data explorer</Link>
+        <Link href="/visualisations" aria-current={location.startsWith("/visualisations") ? "page" : undefined} data-testid="nav-visualisations">Visualisations</Link>
+        {localMode && <Link href="/settings" aria-current={location === "/settings" ? "page" : undefined} data-testid="nav-settings">Settings</Link>}
       </nav>
       <div className="rail-bottom">
         <div className="environment"><span className="environment-dot" /> {localMode ? "LOCAL · NO LOGIN" : "PRIVATE REGISTRY"}</div>
@@ -32,7 +30,7 @@ export default function AppShell({
       </div>
     </aside>
     <div className="workspace">
-      <header className="workspace-bar"><span>OPERATIONS REGISTRY</span><span className="workspace-status">{localMode ? "LOCAL WEB EDITION" : "ON-PREMISES"}</span></header>
+      <header className="workspace-bar"><span>OPERATIONS REGISTRY</span><span className="workspace-status">{localMode ? "LOCAL" : "ON-PREMISES"}</span></header>
       <div className="workspace-content">{children}</div>
       <footer className="footer"><span>KUDUNS · INDUSTRIAL DATA</span><span>PRIVATE INFRASTRUCTURE</span></footer>
     </div>

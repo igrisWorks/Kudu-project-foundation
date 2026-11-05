@@ -748,6 +748,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   const [sourceKey, setSourceKey] = useState(""); const [displayName, setDisplayName] = useState("");
   const [type, setType] = useState<DataSourceType>("rest_api"); const [description, setDescription] = useState("");
   const [baseUrl, setBaseUrl] = useState(""); const [relativePath, setRelativePath] = useState("");
+  const [sourceTimezone, setSourceTimezone] = useState("");
   const [endpointPath, setEndpointPath] = useState(""); const [recordsPath, setRecordsPath] = useState("");
   const [authMode, setAuthMode] = useState<RestApiAuthMode>("none");
   const [trustPrivateHost, setTrustPrivateHost] = useState(false);
@@ -851,6 +852,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         method: "GET",
         authMode,
         ...(trustPrivateHost && restHostname ? { trustedPrivateHost: restHostname } : {}),
+        ...(sourceTimezone.trim() ? { sourceTimezone: sourceTimezone.trim() } : {}),
         timeoutMs: Number(timeoutMs),
         maxResponseBytes: Number(maxResponseBytes),
         maxRecords: Number(maxRecords),
@@ -861,9 +863,9 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       };
     }
     if (type === "json_file") {
-      return { kind: "json_file", relativePath: relativePath.trim(), ...(recordsPath.trim() ? { recordsPath: recordsPath.trim() } : {}) };
+      return { kind: "json_file", relativePath: relativePath.trim(), ...(recordsPath.trim() ? { recordsPath: recordsPath.trim() } : {}), ...(sourceTimezone.trim() ? { sourceTimezone: sourceTimezone.trim() } : {}) };
     }
-    if (type === "csv_file") return { kind: "csv_file", relativePath: relativePath.trim() };
+    if (type === "csv_file") return { kind: "csv_file", relativePath: relativePath.trim(), ...(sourceTimezone.trim() ? { sourceTimezone: sourceTimezone.trim() } : {}) };
     return { kind: "manual" };
   }
   async function runDiscovery() {
@@ -1005,6 +1007,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         setBaseUrl(record.configuration.baseUrl);
         setEndpointPath(record.configuration.endpointPath ?? "");
         setRecordsPath(record.configuration.recordsPath ?? "");
+        setSourceTimezone(record.configuration.sourceTimezone ?? "");
         setAuthMode(record.configuration.authMode ?? "none");
         setTrustPrivateHost(Boolean(record.configuration.trustedPrivateHost));
         setTimeoutMs(String(record.configuration.timeoutMs ?? 10000));
@@ -1032,8 +1035,12 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       if (record.configuration.kind === "json_file") {
         setRelativePath(record.configuration.relativePath);
         setRecordsPath(record.configuration.recordsPath ?? "");
+        setSourceTimezone(record.configuration.sourceTimezone ?? "");
       }
-      if (record.configuration.kind === "csv_file") setRelativePath(record.configuration.relativePath);
+      if (record.configuration.kind === "csv_file") {
+        setRelativePath(record.configuration.relativePath);
+        setSourceTimezone(record.configuration.sourceTimezone ?? "");
+      }
     }).catch(cause => { if (active) setLoadError(displayError(cause)); }).finally(() => { if (active) setInitialLoading(false); });
     return () => { active = false; };
   }, [editing, id, loadAttempt]);
@@ -1096,6 +1103,13 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         if (dateFromParameter.trim()) parameters.push(dateFromParameter.trim());
         if (dateToParameter.trim()) parameters.push(dateToParameter.trim());
         if (new Set(parameters).size !== parameters.length) errors.limitParameter = "Pagination and date query parameter names must be distinct.";
+      }
+    }
+    if (sourceTimezone.trim()) {
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: sourceTimezone.trim() }).format(0);
+      } catch {
+        errors.sourceTimezone = "Use a valid IANA time zone, such as Europe/Berlin.";
       }
     }
     if ((type === "json_file" || type === "csv_file") && !relativePath.trim()) errors.relativePath = "Relative path is required.";
@@ -1163,7 +1177,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       <div className="form-grid">
         <Field label="Source key" name="source-key" value={sourceKey} onChange={setSourceKey} required hint="A stable identifier for this source." error={fieldErrors.sourceKey} />
         <Field label="Display name" name="source-display-name" value={displayName} onChange={setDisplayName} required error={fieldErrors.displayName} />
-        <div className="field"><label htmlFor="data-source-type">Source type</label><select id="data-source-type" data-testid="select-data-source-type" value={type} onChange={event => { setType(event.target.value as DataSourceType); setFieldErrors({}); setClearCredential(false); setRecordsPath(""); setTrustPrivateHost(false); clearDiscovery(); }} aria-describedby="source-type-hint">{DATA_SOURCE_TYPES.map(value => <option value={value} key={value}>{sourceLabels[value]}</option>)}</select><span className="field-hint" id="source-type-hint">Changing type replaces the configuration metadata on save.</span></div>
+        <div className="field"><label htmlFor="data-source-type">Source type</label><select id="data-source-type" data-testid="select-data-source-type" value={type} onChange={event => { setType(event.target.value as DataSourceType); setFieldErrors({}); setClearCredential(false); setRecordsPath(""); setSourceTimezone(""); setTrustPrivateHost(false); clearDiscovery(); }} aria-describedby="source-type-hint">{DATA_SOURCE_TYPES.map(value => <option value={value} key={value}>{sourceLabels[value]}</option>)}</select><span className="field-hint" id="source-type-hint">Changing type replaces the configuration metadata on save.</span></div>
         <div className="field"><label className="field-label">Record state</label><label className="check-row"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} data-testid="checkbox-source-enabled" /><span><strong>Enabled</strong><br /><span className="field-hint">Metadata only; no connector is started.</span></span></label></div>
         <div className="field span-2"><label htmlFor="source-description">Description</label><textarea id="source-description" data-testid="input-source-description" value={description} onChange={event => setDescription(event.target.value)} placeholder="Purpose, ownership, or operational context" /></div>
       </div>
@@ -1294,6 +1308,12 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       </div>}
       {(type === "json_file" || type === "csv_file") && <div className="field"><label htmlFor="source-relative-path">Relative file path *</label><input id="source-relative-path" data-testid="input-source-relative-path" value={relativePath} onChange={event => changeConfiguration(setRelativePath, event.target.value)} placeholder={type === "csv_file" ? "data/measurements.csv" : "data/faults.json"} aria-invalid={Boolean(fieldErrors.relativePath)} aria-describedby={fieldErrors.relativePath ? "source-relative-path-error" : undefined} />{fieldErrors.relativePath && <span className="field-error" id="source-relative-path-error" data-testid="error-source-relative-path">{fieldErrors.relativePath}</span>}<span className="field-hint">Relative to the configured local data root. Saving does not read the file; discovery and import are explicit actions.</span>
         {type === "json_file" && <><label htmlFor="json-records-path">JSON records path</label><input id="json-records-path" data-testid="input-json-records-path" value={recordsPath} onChange={event => changeConfiguration(setRecordsPath, event.target.value)} placeholder="faults" /><span className="field-hint">Dot path to the record array; leave blank for a top-level array.</span></>}
+      </div>}
+      {(type === "rest_api" || type === "json_file" || type === "csv_file") && <div className="field span-2">
+        <label htmlFor="source-timezone">Source time zone</label>
+        <input id="source-timezone" data-testid="input-source-timezone" value={sourceTimezone} onChange={event => changeConfiguration(setSourceTimezone, event.target.value)} placeholder="Europe/Berlin" aria-invalid={Boolean(fieldErrors.sourceTimezone)} />
+        {fieldErrors.sourceTimezone && <span className="field-error">{fieldErrors.sourceTimezone}</span>}
+        <span className="field-hint">Optional IANA zone used only for timestamps without an offset. KuduNS does not infer the zone from this computer. Ambiguous or nonexistent daylight-saving times must include an explicit offset.</span>
       </div>}
       {type === "manual" && <div className="notice" data-testid="notice-manual-source">Manual source is a reference record. No external connection or ingestion is available.</div>}
       {editing && type !== "manual" && <>

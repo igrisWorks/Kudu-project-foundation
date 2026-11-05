@@ -507,6 +507,7 @@ function syncConfigFingerprint(configuration: Extract<StoredSourceConfiguration,
     authMode: configuration.authMode ?? "none",
     credentialRef: configuration.credentialRef ?? "",
     recordsPath: configuration.recordsPath ?? "",
+    sourceTimezone: configuration.sourceTimezone ?? "",
     pagination: configuration.pagination ?? null,
   })).digest("hex");
 }
@@ -712,6 +713,7 @@ async function executeSyncRun(
             fallbackKey(source.id, rawRecord),
             { connector: "rest_api", responseFormat: "json", syncRunId: run.id, mappingVersion: mapping.version },
             assetMatchContext,
+            source.configuration.sourceTimezone,
           );
           const ingestion = await ingestEvent(db, normalized);
           if (ingestion.duplicate) pageDuplicates += 1;

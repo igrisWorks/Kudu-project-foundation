@@ -190,6 +190,9 @@ function sourceConfigurationMetadata(
         ...(configuration.trustedPrivateHost !== undefined
           ? { trustedPrivateHost: configuration.trustedPrivateHost }
           : {}),
+        ...(configuration.sourceTimezone !== undefined
+          ? { sourceTimezone: configuration.sourceTimezone }
+          : {}),
         ...(configuration.endpointPath !== undefined ? { endpointPath: configuration.endpointPath } : {}),
         ...(configuration.method !== undefined ? { method: configuration.method } : {}),
         ...(configuration.authMode !== undefined ? { authMode: configuration.authMode } : {}),
@@ -205,9 +208,14 @@ function sourceConfigurationMetadata(
         kind: "json_file",
         relativePath: configuration.relativePath,
         ...(configuration.recordsPath ? { recordsPath: configuration.recordsPath } : {}),
+        ...(configuration.sourceTimezone !== undefined ? { sourceTimezone: configuration.sourceTimezone } : {}),
       };
     case "csv_file":
-      return { kind: configuration.kind, relativePath: configuration.relativePath };
+      return {
+        kind: configuration.kind,
+        relativePath: configuration.relativePath,
+        ...(configuration.sourceTimezone !== undefined ? { sourceTimezone: configuration.sourceTimezone } : {}),
+      };
     case "manual":
       return { kind: "manual", referenceOnly: true };
   }

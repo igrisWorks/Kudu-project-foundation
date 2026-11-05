@@ -191,3 +191,26 @@ test("file source paths must stay relative to their configured data root", () =>
     }),
   );
 });
+
+test("source time zone accepts IANA names and rejects unknown zones", () => {
+  const base = {
+    sourceKey: "local-clock",
+    displayName: "Local clock source",
+    sourceType: "json_file",
+    configuration: {
+      kind: "json_file",
+      relativePath: "events.json",
+      sourceTimezone: "Europe/Berlin",
+    },
+  };
+  const validated = validateDataSourceCreate(base);
+  assert.equal(validated.configuration.kind, "json_file");
+  if (validated.configuration.kind === "json_file") {
+    assert.equal(validated.configuration.sourceTimezone, "Europe/Berlin");
+  }
+  const invalid = expectValidationFailure(() => validateDataSourceCreate({
+    ...base,
+    configuration: { ...base.configuration, sourceTimezone: "Mars/Olympus" },
+  }));
+  assert.ok(invalid.fields?.["configuration.sourceTimezone"]);
+});

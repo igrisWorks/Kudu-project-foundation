@@ -24,6 +24,7 @@ export type StoredSourceConfiguration =
       authMode?: "none" | "bearer";
       credentialRef?: string;
       trustedPrivateHost?: string;
+      sourceTimezone?: string;
       timeoutMs?: number;
       maxResponseBytes?: number;
       maxRecords?: number;
@@ -31,8 +32,8 @@ export type StoredSourceConfiguration =
       recordsPath?: string;
       pagination?: RestPaginationConfiguration;
     }
-  | { kind: "json_file"; relativePath: string; recordsPath?: string }
-  | { kind: "csv_file"; relativePath: string }
+  | { kind: "json_file"; relativePath: string; recordsPath?: string; sourceTimezone?: string }
+  | { kind: "csv_file"; relativePath: string; sourceTimezone?: string }
   | { kind: "manual" };
 
 interface AssetsTable {

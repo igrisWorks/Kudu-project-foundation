@@ -248,12 +248,12 @@ function isNumericValue(value: unknown, csv = false): boolean {
   return /^-?(?:\d+\.?\d*|\.\d+)$/.test(value.trim()) && Number.isFinite(Number(value));
 }
 
-function discoveredValueType(value: unknown, csv = false): DiscoveredField["valueType"] {
+function discoveredValueType(value: unknown, csv = false, sourceTimezone?: string): DiscoveredField["valueType"] {
   if (Array.isArray(value)) return "array";
   if (value === null) return "unknown";
   if (isRecord(value)) return "object";
   if (typeof value === "string" || typeof value === "number") {
-    if (normalizeOccurrenceTimestamp(value)) return "datetime";
+    if (normalizeOccurrenceTimestamp(value, sourceTimezone)) return "datetime";
     if (csv && typeof value === "string") {
       if (/^(true|false)$/i.test(value.trim())) return "boolean";
       if (isNumericValue(value, true)) return "number";
@@ -264,7 +264,7 @@ function discoveredValueType(value: unknown, csv = false): DiscoveredField["valu
   return "unknown";
 }
 
-function collectLeafFields(records: Record<string, unknown>[], csv = false): InspectedField[] {
+function collectLeafFields(records: Record<string, unknown>[], csv = false, sourceTimezone?: string): InspectedField[] {
   const entries = new Map<string, {
     types: Set<DiscoveredField["valueType"]>;
     examples: string[];
@@ -276,7 +276,7 @@ function collectLeafFields(records: Record<string, unknown>[], csv = false): Ins
   const visit = (value: unknown, path: string, depth: number) => {
     const leafName = path.split(".").at(-1) ?? "";
     if (!path || !supportedPath(path) || depth > MAX_DISCOVERY_DEPTH || sensitiveName.test(leafName)) return;
-    const valueType = discoveredValueType(value, csv);
+    const valueType = discoveredValueType(value, csv, sourceTimezone);
     const entry = entries.get(path) ?? {
       types: new Set<DiscoveredField["valueType"]>(),
       examples: [],
@@ -288,7 +288,7 @@ function collectLeafFields(records: Record<string, unknown>[], csv = false): Ins
     entry.types.add(valueType);
     entry.presentCount += 1;
     if (isPlaceholder(value)) entry.placeholderCount += 1;
-    if (normalizeOccurrenceTimestamp(value)) entry.validTimestampCount += 1;
+    if (normalizeOccurrenceTimestamp(value, sourceTimezone)) entry.validTimestampCount += 1;
     if (!isPlaceholder(value) && isNumericValue(value, csv)) entry.numericCount += 1;
     if (entry.examples.length < 3 && value !== undefined) {
       const example = displayExample(value, leafName);
@@ -599,6 +599,7 @@ function toPreview(
   records: Record<string, unknown>[],
   fields: DiscoveredField[],
   suggestions: SuggestedFieldMapping[],
+  sourceTimezone?: string,
 ): DataSourceDiscoveryResult["preview"] {
   const definition = definitionFor(suggestions);
   const pathFor = (target: SuggestedTargetField) => suggestions.find(item => item.target === target)?.sourcePath;
@@ -613,7 +614,7 @@ function toPreview(
     if (!eventPath) issues.push("Choose a source for required Event type.");
     else if (typeof eventType !== "string" || !eventType.trim()) issues.push("Event type must be a non-empty string.");
     if (!timePath) issues.push("Choose a source for required Occurrence time.");
-    else if (!normalizeOccurrenceTimestamp(timestamp)) issues.push("Occurrence time is not a supported date/time or Unix timestamp.");
+    else if (!normalizeOccurrenceTimestamp(timestamp, sourceTimezone)) issues.push("Occurrence time is not supported, ambiguous, or missing a configured source time zone.");
     const sourceRecordId = idPath ? readMappedField(record as JsonObject, idPath) : undefined;
     if (sourceRecordId !== undefined && sourceRecordId !== null && sourceRecordId !== "") {
       const id = String(sourceRecordId);
@@ -626,7 +627,7 @@ function toPreview(
     }
     const normalized: Record<string, string> = {};
     if (typeof eventType === "string" && eventType.trim()) normalized.eventType = eventType.trim();
-    const normalizedTime = normalizeOccurrenceTimestamp(timestamp);
+    const normalizedTime = normalizeOccurrenceTimestamp(timestamp, sourceTimezone);
     if (normalizedTime) normalized.occurredAt = normalizedTime;
     if (idPath && sourceRecordId !== undefined && sourceRecordId !== null) normalized.sourceRecordId = displayExample(sourceRecordId);
     const assetPath = pathFor("assetKey");
@@ -645,6 +646,7 @@ export function buildDiscoveryResult(
   sourceType: DataSourceType,
   document: unknown,
   requestedPath?: string,
+  sourceTimezone?: string,
 ): { result: DataSourceDiscoveryResult; selectedRows: Record<string, unknown>[] } {
   let candidates: LocatedArray[];
   let truncated = false;
@@ -673,7 +675,7 @@ export function buildDiscoveryResult(
   }
   const selected = selectedRecordPath ? candidates.find(candidate => candidate.path === selectedRecordPath) : undefined;
   const records = selected?.rows.slice(0, MAX_PREVIEW_RECORDS) ?? [];
-  const inspectedFields = collectLeafFields(records, sourceType === "csv_file");
+  const inspectedFields = collectLeafFields(records, sourceType === "csv_file", sourceTimezone);
   const fields: DiscoveredField[] = inspectedFields.map(({ path, valueType, examples }) => ({ path, valueType, examples }));
   const suggestions = makeSuggestions(inspectedFields, records.length);
   const structures = collectStructures(records, sourceType === "csv_file");
@@ -688,7 +690,7 @@ export function buildDiscoveryResult(
     warnings.push("Nested arrays are summarized for review, not flattened into event fields. Imports retain their original structure.");
   }
   if (fields.length) warnings.push("Sensitive-looking field values are hidden in examples. Unmapped source fields remain in each imported event payload.");
-  const preview = toPreview(records, fields, suggestions);
+  const preview = toPreview(records, fields, suggestions, sourceTimezone);
   return {
     result: {
       sourceType: sourceType as DataSourceDiscoveryResult["sourceType"],
@@ -778,7 +780,10 @@ export function registerDataDiscoveryRoutes(
       }
       if (!requestedPath && isJsonConfiguration(config) && config.recordsPath) requestedPath = config.recordsPath;
     }
-    let discovery = buildDiscoveryResult(sourceType, document, requestedPath);
+    const sourceTimezone = "sourceTimezone" in validated.configuration
+      ? validated.configuration.sourceTimezone
+      : undefined;
+    let discovery = buildDiscoveryResult(sourceType, document, requestedPath, sourceTimezone);
     if (sourceType === "rest_api" && restConfiguration?.pagination && discovery.result.selectedRecordPath) {
       const sample = await extendRestDiscoverySample(
         restConfiguration,
@@ -788,7 +793,7 @@ export function registerDataDiscoveryRoutes(
       );
       if (sample.sampledPageCount > 1) {
         document = sample.document;
-        discovery = buildDiscoveryResult(sourceType, document, requestedPath ?? discovery.result.selectedRecordPath);
+        discovery = buildDiscoveryResult(sourceType, document, requestedPath ?? discovery.result.selectedRecordPath, sourceTimezone);
         discovery.result.sampledPageCount = sample.sampledPageCount;
         discovery.result.warnings.push(
           `Discovery sampled ${sample.sampledPageCount} pages; this is a bounded sample, not a total source count.`,

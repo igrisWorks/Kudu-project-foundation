@@ -21,6 +21,8 @@ import type {
   EventDetail,
   EventListFilters,
   EventListItem,
+  ExplorerEventQuery,
+  ExplorerQualityReport,
   HealthResponse,
   IngestEventInput,
   IngestEventResponse,
@@ -359,6 +361,61 @@ export function listEvents(
 
 export function getEvent(id: string): Promise<EventDetail> {
   return request(`/api/v1/events/${encodeURIComponent(id)}`);
+}
+
+function explorerQueryPath(path: string, query: ExplorerEventQuery): string {
+  const params = new URLSearchParams();
+  for (const key of ["sourceId", "search", "eventType", "from", "to", "sortBy", "sortDirection"] as const) {
+    const value = query[key];
+    if (value) {
+      const isLocalDateFilter = (key === "from" || key === "to") && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+      const normalized = isLocalDateFilter ? new Date(value).toISOString() : value;
+      params.set(key, normalized);
+    }
+  }
+  if (query.page !== undefined) params.set("page", String(query.page));
+  if (query.pageSize !== undefined) params.set("pageSize", String(query.pageSize));
+  const suffix = params.toString();
+  return suffix ? `${path}${path.includes("?") ? "&" : "?"}${suffix}` : path;
+}
+
+export function listExplorerEvents(query: ExplorerEventQuery): Promise<Page<EventDetail>> {
+  return request(explorerQueryPath("/api/v1/explorer/events", query));
+}
+
+export function getExplorerQuality(sourceId?: string): Promise<ExplorerQualityReport> {
+  const query = sourceId ? `?sourceId=${encodeURIComponent(sourceId)}` : "";
+  return request(`/api/v1/explorer/quality${query}`);
+}
+
+export async function downloadExplorerEvents(
+  format: "json" | "csv" | "xlsx",
+  query: ExplorerEventQuery,
+): Promise<Blob> {
+  const headers = new Headers();
+  headers.set("Accept", "*/*");
+  if (csrfToken) headers.set("X-Kudu-CSRF", csrfToken);
+  let response: Response;
+  try {
+    response = await fetch(
+      explorerQueryPath(`/api/v1/explorer/export?format=${format}`, query),
+      { credentials: "same-origin", headers },
+    );
+  } catch {
+    throw new ApiError("The Kudu API could not be reached.", 0, "NETWORK_ERROR");
+  }
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    const errorBody = typeof payload === "object" && payload !== null && "error" in payload
+      ? (payload as { error?: { code?: string; message?: string } }).error
+      : undefined;
+    if (response.status === 401 && (errorBody?.code === "AUTH_REQUIRED" || errorBody?.code === "SESSION_EXPIRED")) {
+      setCsrfToken(null);
+      if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    }
+    throw new ApiError(errorBody?.message ?? `Request failed (${response.status}).`, response.status, errorBody?.code ?? "REQUEST_FAILED");
+  }
+  return response.blob();
 }
 
 export function ingestEvent(input: IngestEventInput): Promise<IngestEventResponse> {

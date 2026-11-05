@@ -242,6 +242,7 @@ async function applyActiveMapping(
   recordNumber: number,
   relativePath: string,
   assetMatchContext?: AssetMatchContext,
+  sourceTimezone?: string,
 ): Promise<JsonRecord> {
   const sourceId = prepared.input.sourceId;
   if (typeof sourceId !== "string") throw recordFailure("The source identifier is invalid.");
@@ -254,6 +255,7 @@ async function applyActiveMapping(
     fallbackDeduplicationKey(relativePath, recordNumber),
     { importFormat: format },
     assetMatchContext,
+    sourceTimezone,
   );
 }
 
@@ -448,6 +450,7 @@ async function processImport(
   bytes: Buffer,
   activeMapping?: ActiveEventMapping,
   recordsPath?: string,
+  sourceTimezone?: string,
 ): Promise<FileImportResult> {
   let text: string;
   try {
@@ -505,7 +508,7 @@ async function processImport(
     try {
       const prepared = item.buildInput();
       const input = activeMapping
-        ? await applyActiveMapping(db, prepared, activeMapping, format, item.record, relativePath, assetMatchContext)
+              ? await applyActiveMapping(db, prepared, activeMapping, format, item.record, relativePath, assetMatchContext, sourceTimezone)
         : prepared.input;
       const response = await ingestEvent(db, input);
       if (response.duplicate) result.skipped += 1;
@@ -592,6 +595,7 @@ export function registerFileImportRoutes(
       return processImport(
         db, source.id, configuration.relativePath, format, bytes, activeMapping,
         configuration.kind === "json_file" ? configuration.recordsPath : undefined,
+        configuration.sourceTimezone,
       );
     },
   );

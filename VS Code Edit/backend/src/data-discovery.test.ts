@@ -94,6 +94,22 @@ test("discovery suggests common aliases, accepts Unix timestamps, and hides sens
   assert.equal(normalizeOccurrenceTimestamp("2026-11-01T12:00:00"), undefined, "timestamps without a timezone must not be guessed");
 });
 
+test("configured source time zones normalize local timestamps and reject daylight-saving ambiguity", () => {
+  assert.equal(
+    normalizeOccurrenceTimestamp("2025-12-18T09:51:23.962", "Europe/Berlin"),
+    "2025-12-18T08:51:23.962Z",
+  );
+  assert.equal(normalizeOccurrenceTimestamp("2026-03-29T02:30:00", "Europe/Berlin"), undefined);
+  assert.equal(normalizeOccurrenceTimestamp("2026-10-25T02:30:00", "Europe/Berlin"), undefined);
+  assert.equal(normalizeOccurrenceTimestamp("2026-10-25T02:30:00+02:00", "Europe/Berlin"), "2026-10-25T02:30:00+02:00");
+  const { result } = buildDiscoveryResult("json_file", {
+    events: [{ eventType: "alarm", occurredAt: "2025-12-18T09:51:23.962" }],
+  }, "events", "Europe/Berlin");
+  assert.equal(result.fields.find(field => field.path === "occurredAt")?.valueType, "datetime");
+  assert.equal(result.preview[0]?.state, "valid");
+  assert.equal(result.preview[0]?.normalized.occurredAt, "2025-12-18T08:51:23.962Z");
+});
+
 test("shared recognition uses industrial aliases and timezone-aware value evidence across JSON and CSV", () => {
   const json = buildDiscoveryResult("json_file", {
     alarms: [{

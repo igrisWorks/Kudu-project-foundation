@@ -95,7 +95,7 @@ Example:
 | `PATCH` | `/api/v1/data-sources/{id}` | Update supplied metadata. Changing source type requires matching configuration. |
 | `POST` | `/api/v1/data-sources/discover` | Explicitly inspect REST (up to three configured pages), JSON, or CSV and return candidate collections, field suggestions, and a bounded preview. |
 
-Supported source types are `rest_api`, `json_file`, `csv_file`, and `manual`. REST configuration accepts an HTTP(S) base URL without credentials, query parameters, or fragments, plus a relative endpoint path. Only `GET` and JSON responses are supported. Configure the JSON records path (a dot path or blank for a top-level array), timeout, response-size limit, and record-count limit (up to 100,000 records across a run). Pagination is opt-in; when configured, choose the source API's offset, page-number, or cursor convention, page size, query parameter names, optional date bounds, and request interval.
+Supported source types are `rest_api`, `json_file`, `csv_file`, and `manual`. REST configuration accepts an HTTP(S) base URL without credentials, query parameters, or fragments, plus a relative endpoint path. Only `GET` and JSON responses are supported. Configure the JSON records path (a dot path or blank for a top-level array), timeout, response-size limit, and record-count limit (up to 100,000 records across a run). Pagination is opt-in; when configured, choose the source API's offset, page-number, or cursor convention, page size, query parameter names, optional date bounds, and request interval. REST, JSON, and CSV sources may also set `sourceTimezone` to an IANA zone such as `Europe/Berlin` for local timestamps without an offset. KuduNS preserves the original timestamp text and normalizes event time to UTC. Nonexistent or ambiguous daylight-saving wall times are rejected unless input includes an explicit offset; the host or browser time zone is never inferred.
 
 Authentication is either `none` or `bearer`. Bearer authentication requires HTTPS and an environment-variable reference such as `env:KUDU_SOURCE_ERP_TOKEN`. The referenced variable must be provisioned out of band. The API returns only whether a reference is configured; it never returns the reference or secret value. A reference from an older registry version is inactive unless `authMode` is `bearer`.
 
@@ -265,6 +265,16 @@ Ingestion requires a registered `sourceId`, event type, RFC 3339 `occurredAt` wi
 Deduplication keys are unique per data source. Repeating the same key with identical event content returns the existing event with `duplicate: true`; reusing it with different content returns `409 DEDUPLICATION_CONFLICT`. Requests without a deduplication key are always inserted as new events. The key is scoped to the source so unrelated sources can use the same source-record key.
 
 List filters are `sourceId`, `assetId`, exact case-insensitive `sourceKey` and `assetKey`, exact `eventType`, and inclusive RFC 3339 `from`/`to` timestamps. Events are ordered by occurrence time descending, then ID descending. `pageSize` defaults to 25 and is limited to 100.
+
+### Data explorer, quality, and exports
+
+| Method | Route | Behavior |
+|---|---|---|
+| `GET` | `/api/v1/explorer/events` | Search and page persisted event details with source/asset attribution, payload, and provenance. |
+| `GET` | `/api/v1/explorer/quality` | Compare recent and preceding persisted samples per source; results are observational and do not update a baseline. |
+| `GET` | `/api/v1/explorer/export?format=json\|csv\|xlsx` | Export complete filtered event records, including source attribution, payload, original record, and provenance. |
+
+Explorer filters include `sourceId`, `search`, `eventType`, `from`, `to`, `page`, `pageSize`, `sortBy`, and `sortDirection`. Time filters must include a time zone; the browser converts its explicit local filter input to UTC, while source timestamps use only each source's configured time zone. Quality reports show field presence/types and potential differences between bounded recent and preceding samples; they are not proof of an upstream schema change. Exports are rejected rather than truncated when they exceed 10,000 events or 25 MiB. Full CSV and XLSX exports retain nested payload/provenance JSON in dedicated fields; XLSX splits large JSON text over multiple cells to preserve it. The UI also offers a selected-field CSV for the visible page. Visualisations support line, category/bar, distribution, and table views from up to 100 persisted records per query; saved definitions are stored only in the current browser profile.
 
 Example:
 

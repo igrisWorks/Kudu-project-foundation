@@ -447,5 +447,36 @@ test(
       await evaluate(`Boolean(document.querySelector('[data-testid="row-data-source-${trustedSource.id}"]'))`),
       false,
     );
+
+    await evaluate("window.location.href = '/data-explorer'; true");
+    await waitFor("data explorer page", `document.querySelector('h1')?.innerText === 'Data explorer'`);
+    await waitFor("persisted event rows", `Boolean(document.querySelector('[data-testid^="button-select-event-"]'))`);
+    await waitFor("payload tree inspector", `Boolean(document.querySelector('[data-testid="tree-event-payload"]'))`);
+    await waitFor("nested object child table", `Boolean(document.querySelector('[data-testid="related-record-tables"]'))`);
+    await waitFor("selected field export controls", `Boolean(document.querySelector('[data-testid="button-export-selected-fields"]'))`);
+    assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="select-explorer-sort-by"]'))`));
+    const explorerSummary = await evaluate(`document.querySelector('.dw-event-table')?.innerText ?? ''`);
+    assert.ok(explorerSummary.trim().length > 20, "the table renders persisted event values and source attribution");
+    assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="explorer-quality-report"]'))`));
+    await click('[data-testid="button-payload-raw"]');
+    assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="json-event-payload"]'))`));
+
+    await evaluate("window.location.href = '/visualisations'; true");
+    await waitFor("saved visualisations page", `document.querySelector('h1')?.innerText === 'Visualisations'`);
+    assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="button-load-visualisation-data"]'))`));
+    assert.equal(await evaluate(`document.querySelector('[data-testid="select-visualisation-type"]')?.options.length`), 4);
+    const persistedSample = await evaluate(`fetch('/api/v1/explorer/events?page=1&pageSize=1').then(response => response.json()).then(page => page.items[0] ? { sourceId: page.items[0].source.id, eventType: page.items[0].eventType } : null)`);
+    assert.ok(persistedSample, "visualisations must use an already imported event");
+    await setValue('[data-testid="select-visualisation-source"]', persistedSample.sourceId);
+    await setValue('[data-testid="input-visualisation-event-type"]', persistedSample.eventType);
+    await click('[data-testid="button-load-visualisation-data"]');
+    await waitFor("visualisation data count", `Boolean(document.querySelector('.dw-chart-foot')?.innerText.match(/Imported events queried: [1-9]/))`);
+    await setValue('[data-testid="select-visualisation-type"]', "distribution");
+    const categoryPath = await waitFor("imported category fields", `document.querySelector('[data-testid="select-visualisation-category"]')?.options[1]?.value`);
+    await setValue('[data-testid="select-visualisation-category"]', categoryPath);
+    await waitFor("imported category chart", `Boolean(document.querySelector('[data-testid="category-visualisation"]'))`);
+    await setValue('[data-testid="input-visualisation-name"]', "Browser smoke distribution");
+    await click('[data-testid="button-save-visualisation"]');
+    await waitFor("saved visualisation configuration", `Boolean(document.querySelector('[data-testid^="button-open-visualisation-"]'))`);
   },
 );

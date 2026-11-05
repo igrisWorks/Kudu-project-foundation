@@ -9,6 +9,8 @@ import { DataSourceDetailPage, DataSourceFormPage, DataSourceListPage } from "./
 import { EventDetailPage, EventsListPage } from "./pages/EventsPage";
 import NamespacePage from "./pages/NamespacePage";
 import SettingsPage from "./pages/SettingsPage";
+import DataExplorerPage from "./pages/DataExplorerPage";
+import VisualisationsPage from "./pages/VisualisationsPage";
 
 function NotFoundPage() {
   return <main className="page-main"><section className="not-found">
@@ -89,6 +91,8 @@ export default function App() {
 
   return <AppShell localMode={localMode} onLogout={() => void handleLogout()}><Switch>
     <Route path="/"><HomePage localMode={localMode} /></Route>
+    <Route path="/data-explorer" component={DataExplorerPage} />
+    <Route path="/visualisations" component={VisualisationsPage} />
     <Route path="/namespace" component={NamespacePage} />
     <Route path="/assets" component={AssetListPage} />
     <Route path="/assets/new"><AssetFormPage editing={false} /></Route>

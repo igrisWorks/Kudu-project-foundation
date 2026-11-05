@@ -319,6 +319,22 @@ function parseRecordsPath(value: unknown, errors: Errors): string | undefined {
   return parseDotPath(value, "configuration.recordsPath", errors);
 }
 
+function parseSourceTimezone(value: unknown, errors: Errors): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 100) {
+    errors["configuration.sourceTimezone"] = "Use a valid IANA time zone, such as Europe/Berlin.";
+    return undefined;
+  }
+  const timezone = value.trim();
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(0);
+    return timezone;
+  } catch {
+    errors["configuration.sourceTimezone"] = "Use a valid IANA time zone, such as Europe/Berlin.";
+    return undefined;
+  }
+}
+
 function parseQueryParameter(value: unknown, field: string, errors: Errors): string | undefined {
   if (typeof value !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value.trim())) {
     errors[field] = "Use a parameter name of up to 64 letters, numbers, dots, dashes, or underscores.";
@@ -427,7 +443,7 @@ function parseConfiguration(
       value,
       [
         "kind", "baseUrl", "endpointPath", "method", "authMode", "credentialRef",
-        "trustedPrivateHost", "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath", "pagination",
+        "trustedPrivateHost", "sourceTimezone", "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath", "pagination",
       ],
       errors,
     );
@@ -520,6 +536,7 @@ function parseConfiguration(
     const timeoutMs = optionalInteger(value, "timeoutMs", 500, 30_000, errors);
     const maxResponseBytes = optionalInteger(value, "maxResponseBytes", 1024, 5 * 1024 * 1024, errors);
     const maxRecords = optionalInteger(value, "maxRecords", 1, 100_000, errors);
+    const sourceTimezone = parseSourceTimezone(value.sourceTimezone, errors);
     const recordsPath = parseRecordsPath(value.recordsPath, errors);
     const pagination = parsePagination(value.pagination, errors);
 
@@ -531,6 +548,7 @@ function parseConfiguration(
       ...(authMode !== undefined ? { authMode } : {}),
       ...(credentialRef !== undefined ? { credentialRef } : {}),
       ...(trustedPrivateHost !== undefined ? { trustedPrivateHost } : {}),
+      ...(sourceTimezone !== undefined ? { sourceTimezone } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
       ...(maxRecords !== undefined ? { maxRecords } : {}),
@@ -541,12 +559,14 @@ function parseConfiguration(
   }
 
   if (sourceType === "json_file" || sourceType === "csv_file") {
-    unknownFields(value, sourceType === "json_file" ? ["kind", "relativePath", "recordsPath"] : ["kind", "relativePath"], errors);
+    unknownFields(value, sourceType === "json_file" ? ["kind", "relativePath", "recordsPath", "sourceTimezone"] : ["kind", "relativePath", "sourceTimezone"], errors);
     const recordsPath = sourceType === "json_file" ? parseRecordsPath(value.recordsPath, errors) : undefined;
+    const sourceTimezone = parseSourceTimezone(value.sourceTimezone, errors);
     return {
       kind: sourceType,
       relativePath: parseRelativePath(value.relativePath, errors),
       ...(recordsPath !== undefined && sourceType === "json_file" ? { recordsPath } : {}),
+      ...(sourceTimezone !== undefined ? { sourceTimezone } : {}),
     };
   }
 

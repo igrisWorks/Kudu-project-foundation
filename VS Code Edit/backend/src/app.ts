@@ -17,6 +17,7 @@ import { AuthManager, registerAuthenticationGuard, registerAuthRoutes, type Auth
 import { registerLocalDatabaseRoutes } from "./local-database-routes.js";
 import type { LocalDatabaseManager } from "./local-database.js";
 import { registerDataDiscoveryRoutes } from "./data-discovery.js";
+import { registerDataExplorerRoutes } from "./data-explorer.js";
 
 interface AppOptions {
   db: Kysely<Database>;
@@ -181,6 +182,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   }
   registerRegistryRoutes(app, options.db);
   registerEventRoutes(app, options.db);
+  registerDataExplorerRoutes(app, options.db);
   registerEventMappingRoutes(app, options.db);
   registerRestSyncRoutes(app, options.db, {
     trustedHosts: options.restTrustedHosts,
