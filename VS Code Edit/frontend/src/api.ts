@@ -22,6 +22,9 @@ import type {
   EventListFilters,
   EventListItem,
   ExplorerEventQuery,
+  ExplorerRecordDetail,
+  ExplorerRecordPage,
+  ExplorerRecordQuery,
   ExplorerQualityReport,
   HealthResponse,
   IngestEventInput,
@@ -383,6 +386,26 @@ export function listExplorerEvents(query: ExplorerEventQuery): Promise<Page<Even
   return request(explorerQueryPath("/api/v1/explorer/events", query));
 }
 
+function explorerRecordQueryPath(path: string, query: ExplorerRecordQuery): string {
+  const params = new URLSearchParams();
+  for (const key of ["sourceId", "search", "sortBy", "sortDirection"] as const) {
+    const value = query[key];
+    if (value) params.set(key, value);
+  }
+  params.set("page", String(query.page));
+  params.set("pageSize", String(query.pageSize));
+  const suffix = params.toString();
+  return suffix ? `${path}${path.includes("?") ? "&" : "?"}${suffix}` : path;
+}
+
+export function listExplorerRecords(query: ExplorerRecordQuery): Promise<ExplorerRecordPage> {
+  return request(explorerRecordQueryPath("/api/v1/explorer/records", query));
+}
+
+export function getExplorerRecord(id: string): Promise<ExplorerRecordDetail> {
+  return request(`/api/v1/explorer/records/${encodeURIComponent(id)}`);
+}
+
 export function getExplorerQuality(sourceId?: string): Promise<ExplorerQualityReport> {
   const query = sourceId ? `?sourceId=${encodeURIComponent(sourceId)}` : "";
   return request(`/api/v1/explorer/quality${query}`);
@@ -399,6 +422,36 @@ export async function downloadExplorerEvents(
   try {
     response = await fetch(
       explorerQueryPath(`/api/v1/explorer/export?format=${format}`, query),
+      { credentials: "same-origin", headers },
+    );
+  } catch {
+    throw new ApiError("The Kudu API could not be reached.", 0, "NETWORK_ERROR");
+  }
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    const errorBody = typeof payload === "object" && payload !== null && "error" in payload
+      ? (payload as { error?: { code?: string; message?: string } }).error
+      : undefined;
+    if (response.status === 401 && (errorBody?.code === "AUTH_REQUIRED" || errorBody?.code === "SESSION_EXPIRED")) {
+      setCsrfToken(null);
+      if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    }
+    throw new ApiError(errorBody?.message ?? `Request failed (${response.status}).`, response.status, errorBody?.code ?? "REQUEST_FAILED");
+  }
+  return response.blob();
+}
+
+export async function downloadExplorerRecords(
+  format: "json" | "csv" | "xlsx",
+  query: ExplorerRecordQuery,
+): Promise<Blob> {
+  const headers = new Headers();
+  headers.set("Accept", "*/*");
+  if (csrfToken) headers.set("X-Kudu-CSRF", csrfToken);
+  let response: Response;
+  try {
+    response = await fetch(
+      explorerRecordQueryPath(`/api/v1/explorer/records/export?format=${format}`, query),
       { credentials: "same-origin", headers },
     );
   } catch {

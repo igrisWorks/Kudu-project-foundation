@@ -16,8 +16,9 @@ import type { FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database, StoredSourceConfiguration } from "./database.js";
 import { ApiFailure } from "./errors.js";
-import { getActiveEventMapping, loadAssetMatchContext, normalizeMappedEvent, readMappedField } from "./event-mappings.js";
-import { ingestEvent } from "./events.js";
+import { getActiveEventMapping, loadAssetMatchContext, readMappedField } from "./event-mappings.js";
+import { automaticEventDefinition, recognizeSourceRecords } from "./data-discovery.js";
+import { normalizeAndLinkSourceRecord, sourceRecordIdentity, storeSourceRecord } from "./source-records.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RESPONSE_BYTES = 1_048_576;
@@ -457,7 +458,7 @@ interface SyncCheckpoint {
 interface SyncRunRow {
   id: string;
   source_id: string;
-  mapping_version: number;
+  mapping_version: number | null;
   status: RestSyncRunStatus;
   resumable: boolean;
   request_succeeded: boolean;
@@ -582,7 +583,7 @@ function nextCursorFromResponse(
 }
 
 async function getSyncRun(db: Kysely<Database>, runId: string): Promise<SyncRunRow | undefined> {
-  return await db.selectFrom("data_source_sync_runs").selectAll().where("id", "=", runId).executeTakeFirst() as SyncRunRow | undefined;
+  return await db.selectFrom("source_sync_runs").selectAll().where("id", "=", runId).executeTakeFirst() as SyncRunRow | undefined;
 }
 
 async function persistRun(
@@ -605,7 +606,7 @@ async function persistRun(
   },
 ): Promise<SyncRunRow> {
   const now = new Date().toISOString();
-  await db.updateTable("data_source_sync_runs").set({
+  await db.updateTable("source_sync_runs").set({
     status: values.status,
     resumable: values.resumable,
     request_succeeded: values.requestSucceeded,
@@ -638,7 +639,7 @@ function appendRunError(
 async function executeSyncRun(
   db: Kysely<Database>,
   source: { id: string; sourceKey: string; configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }> },
-  mapping: Awaited<ReturnType<typeof getActiveEventMapping>> & {},
+  mapping: Awaited<ReturnType<typeof getActiveEventMapping>>,
   initialRun: SyncRunRow,
   endpoint: URL,
   authorization: string | undefined,
@@ -665,7 +666,7 @@ async function executeSyncRun(
   let lastRequestAt = 0;
 
   try {
-    assetMatchContext = mapping.definition.assetKey
+    assetMatchContext = mapping?.definition.assetKey
       ? await loadAssetMatchContext(db, source.sourceKey)
       : undefined;
     while (!done && actionPages < MAX_PAGES_PER_ACTION && pagesCompleted < MAX_RECORDS + 1) {
@@ -698,26 +699,55 @@ async function executeSyncRun(
       let pageImported = 0;
       let pageDuplicates = 0;
       let pageFailed = 0;
+      const objectRecords = records.filter(isRecord) as JsonObject[];
+      const recognition = recognizeSourceRecords("rest_api", objectRecords, source.configuration.sourceTimezone);
+      const automaticDefinition = automaticEventDefinition(recognition);
+      const normalizationMapping = mapping ?? (automaticDefinition ? { definition: automaticDefinition } : undefined);
+      const suggestedSourceRecordId = recognition.suggestions.find(item => item.target === "sourceRecordId")?.sourcePath ?? undefined;
+      const identityDefinition = mapping?.definition
+        ? { ...mapping.definition, sourceRecordId: mapping.definition.sourceRecordId ?? suggestedSourceRecordId }
+        : { sourceRecordId: suggestedSourceRecordId };
       for (let index = 0; index < records.length; index += 1) {
         const value = records[index];
         const recordNumber = fetched + index + 1;
         try {
           if (!isRecord(value)) throw new ApiFailure(400, "INVALID_REMOTE_RECORD", "The remote item must be a JSON object.");
           const rawRecord = value as JsonObject;
-          const normalized = await normalizeMappedEvent(
-            db,
-            source.id,
+          const fallbackDeduplicationKey = fallbackKey(source.id, rawRecord);
+          const identity = sourceRecordIdentity(rawRecord, identityDefinition, fallbackDeduplicationKey);
+          const stored = await storeSourceRecord(db, {
+            sourceId: source.id,
+            sourceRecordId: identity.sourceRecordId,
+            deduplicationKey: identity.deduplicationKey,
             rawRecord,
-            basePayload(rawRecord),
-            mapping,
-            fallbackKey(source.id, rawRecord),
-            { connector: "rest_api", responseFormat: "json", syncRunId: run.id, mappingVersion: mapping.version },
-            assetMatchContext,
-            source.configuration.sourceTimezone,
-          );
-          const ingestion = await ingestEvent(db, normalized);
-          if (ingestion.duplicate) pageDuplicates += 1;
+            provenance: {
+              connector: "rest_api",
+              responseFormat: "json",
+              syncRunId: run.id,
+              ...(mapping ? { mappingVersion: mapping.version } : {}),
+            },
+            syncRunId: run.id,
+            mappingVersion: mapping?.version,
+          });
+          if (stored.duplicate) pageDuplicates += 1;
           else pageImported += 1;
+          let payload: JsonObject = {};
+          try { payload = basePayload(rawRecord); } catch { /* Preserve raw-only when the event payload shape is unsupported. */ }
+          await normalizeAndLinkSourceRecord(db, stored, {
+            sourceId: source.id,
+            rawRecord,
+            basePayload: payload,
+            fallbackDeduplicationKey,
+            mapping: normalizationMapping,
+            provenance: {
+              connector: "rest_api",
+              responseFormat: "json",
+              syncRunId: run.id,
+              ...(mapping ? { mappingVersion: mapping.version } : {}),
+            },
+            assetMatchContext,
+            sourceTimezone: source.configuration.sourceTimezone,
+          });
         } catch (cause) {
           if (!(cause instanceof ApiFailure) || cause.statusCode >= 500) throw cause;
           pageFailed += 1;
@@ -1079,7 +1109,6 @@ export function registerRestSyncRoutes(
     const limits = validateLimits(configuration);
     if (!endpoint || !limits) throw new ApiFailure(409, "SOURCE_CONFIGURATION_INVALID", "Configure a valid endpoint path and bounded request limits.");
     const mapping = await getActiveEventMapping(db, source.id);
-    if (!mapping) throw new ApiFailure(409, "ACTIVE_MAPPING_REQUIRED", "Activate an event mapping before syncing this REST source.");
     if (configuration.authMode === "bearer" && endpoint.protocol !== "https:") {
       throw new ApiFailure(409, "BEARER_REQUIRES_HTTPS", "Bearer authentication requires HTTPS.");
     }
@@ -1100,14 +1129,14 @@ export function registerRestSyncRoutes(
     };
   }
 
-  async function createRun(sourceId: string, mappingVersion: number, configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }>): Promise<SyncRunRow> {
-    const existing = await db.selectFrom("data_source_sync_runs").select(["id"])
+  async function createRun(sourceId: string, mappingVersion: number | null, configuration: Extract<StoredSourceConfiguration, { kind: "rest_api" }>): Promise<SyncRunRow> {
+    const existing = await db.selectFrom("source_sync_runs").select(["id"])
       .where("source_id", "=", sourceId).where("status", "=", "running").executeTakeFirst();
     if (existing) throw new ApiFailure(409, "SYNC_ALREADY_RUNNING", "This source already has an active sync run.");
     const now = new Date().toISOString();
     const runId = randomUUID();
     try {
-      await db.insertInto("data_source_sync_runs").values({
+      await db.insertInto("source_sync_runs").values({
         id: runId,
         source_id: sourceId,
         mapping_version: mappingVersion,
@@ -1160,7 +1189,7 @@ export function registerRestSyncRoutes(
     async (request): Promise<RestSyncResult> => {
       if (request.body !== undefined) throw new ApiFailure(400, "REQUEST_BODY_NOT_ALLOWED", "This sync action does not accept a request body.");
       const source = await loadEnabledRestSource(request.params.id);
-      const run = await createRun(source.id, source.mapping.version, source.configuration);
+      const run = await createRun(source.id, source.mapping?.version ?? null, source.configuration);
       return execute(source, run);
     },
   );
@@ -1170,7 +1199,7 @@ export function registerRestSyncRoutes(
     const source = await db.selectFrom("data_sources").select(["id", "source_type"]).where("id", "=", request.params.id).executeTakeFirst();
     if (!source) throw new ApiFailure(404, "NOT_FOUND", "Data source not found.");
     if (source.source_type !== "rest_api") throw new ApiFailure(409, "UNSUPPORTED_SOURCE_TYPE", "Sync history is available for REST API sources.");
-    const rows = await db.selectFrom("data_source_sync_runs").selectAll()
+    const rows = await db.selectFrom("source_sync_runs").selectAll()
       .where("source_id", "=", source.id).orderBy("started_at", "desc").orderBy("id", "desc").limit(25).execute() as SyncRunRow[];
     return { items: rows.map(runResult) };
   });
@@ -1185,7 +1214,7 @@ export function registerRestSyncRoutes(
       if (!run || run.source_id !== source.id) throw new ApiFailure(404, "NOT_FOUND", "Sync run not found.");
       const staleRunning = run.status === "running" && Date.now() - new Date(run.updated_at).getTime() > 60_000;
       if (staleRunning) {
-        await db.updateTable("data_source_sync_runs").set({
+        await db.updateTable("source_sync_runs").set({
           status: "paused",
           resumable: true,
           updated_at: new Date().toISOString(),
@@ -1199,10 +1228,10 @@ export function registerRestSyncRoutes(
       if (run.config_fingerprint !== syncConfigFingerprint(source.configuration)) {
         throw new ApiFailure(409, "SYNC_CONFIGURATION_CHANGED", "The source pagination or record-selection configuration changed; start a new sync run.");
       }
-      if (source.mapping.version !== run.mapping_version) {
+      if ((source.mapping?.version ?? null) !== run.mapping_version) {
         throw new ApiFailure(409, "SYNC_MAPPING_CHANGED", "The active event mapping changed; start a new sync run.");
       }
-      await db.updateTable("data_source_sync_runs").set({
+      await db.updateTable("source_sync_runs").set({
         status: "running",
         resumable: false,
         updated_at: new Date().toISOString(),

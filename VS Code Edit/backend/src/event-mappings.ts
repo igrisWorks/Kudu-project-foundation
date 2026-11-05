@@ -94,8 +94,23 @@ export function validateEventMappingDefinition(value: unknown): EventMappingVali
 export function readMappedField(record: JsonObject, fieldPath: string): unknown {
   let current: unknown = record;
   for (const part of fieldPath.split(".")) {
-    if (!isPlainObject(current) || !Object.hasOwn(current, part)) return undefined;
-    current = current[part];
+    if (typeof current === "string") {
+      try {
+        const decoded: unknown = JSON.parse(current);
+        if (typeof decoded === "object" && decoded !== null) current = decoded;
+      } catch {
+        return undefined;
+      }
+    }
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9]\d*)$/.test(part)) return undefined;
+      const index = Number(part);
+      if (index >= current.length) return undefined;
+      current = current[index];
+    } else {
+      if (!isPlainObject(current) || !Object.hasOwn(current, part)) return undefined;
+      current = current[part];
+    }
   }
   return current;
 }
@@ -278,7 +293,8 @@ export function normalizeOccurrenceTimestamp(value: unknown, sourceTimezone?: st
   }
   const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2}|(?:UTC|GMT))$/i.test(input);
   if (!hasTimezone) return sourceTimezone ? normalizeLocalTimestamp(input, sourceTimezone) : undefined;
-  if (Number.isNaN(Date.parse(input))) return undefined;
+  const parsed = Date.parse(input);
+  if (Number.isNaN(parsed) || new Date(parsed).getUTCFullYear() === 1) return undefined;
   // Preserve RFC 3339 text (including sub-millisecond precision); normalize other
   // explicitly zoned common date formats to a value accepted by event ingestion.
   if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(input)) return input;
@@ -291,7 +307,7 @@ export async function normalizeMappedEvent(
   sourceId: string,
   rawRecord: JsonObject,
   basePayload: JsonObject,
-  mapping: ActiveEventMapping,
+  mapping: Pick<ActiveEventMapping, "definition"> & { version?: number },
   fallbackDeduplicationKey: string,
   provenance: JsonObject,
   assetMatchContext?: AssetMatchContext,
@@ -387,7 +403,7 @@ export async function normalizeMappedEvent(
     provenance: {
       ...provenance,
       ...(assetMatch ? { assetMatch } : {}),
-      mappingVersion: version,
+      ...(version !== undefined ? { mappingVersion: version } : {}),
       originalRecord: rawRecord,
     },
   };

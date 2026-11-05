@@ -248,7 +248,7 @@ function DataSourceDetailPage() {
       <p data-testid="text-rest-sync-counts">
         {syncResult.pagesCompleted} pages · {syncResult.fetched} fetched · {syncResult.imported} imported · {syncResult.duplicates} duplicates · {syncResult.failed} failed.
       </p>
-      <p className="field-hint">Run {syncResult.runId} · mapping version {syncResult.mappingVersion} · request {syncResult.requestSucceeded ? "succeeded" : "not yet successful"}.</p>
+      <p className="field-hint">Run {syncResult.runId} · {syncResult.mappingVersion ? `mapping version ${syncResult.mappingVersion}` : "no active mapping"} · request {syncResult.requestSucceeded ? "succeeded" : "not yet successful"}.</p>
       {syncResult.errors.length > 0 && <ul className="file-import-errors" data-testid="list-rest-sync-errors">
         {syncResult.errors.map((item, index) => <li key={`${item.record}-${item.code}-${index}`}>
           <strong>{item.record === 0 ? "Request" : `Record ${item.record}`} · {item.code}</strong>: {item.message}
@@ -272,7 +272,7 @@ function DataSourceDetailPage() {
               <span className="time-label">{formatDate(run.startedAt)}</span>
             </div>
             <p>{run.pagesCompleted} pages · {run.fetched} fetched · {run.imported} imported · {run.duplicates} duplicates · {run.failed} failed</p>
-            <p className="field-hint">Mapping version {run.mappingVersion} · run {run.runId}</p>
+            <p className="field-hint">{run.mappingVersion ? `Mapping version ${run.mappingVersion}` : "No active mapping"} · run {run.runId}</p>
             {run.errors.length > 0 && <details>
               <summary>{run.errors.length} recorded errors{run.errorsTruncated ? " (truncated)" : ""}</summary>
               <ul className="file-import-errors">{run.errors.map((item, index) => <li key={`${item.record}-${item.code}-${index}`}>

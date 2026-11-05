@@ -49,8 +49,9 @@ async function createFixture(context: TestLifecycle) {
 
   context.after(async () => {
     if (sourceIds.length) {
-      await db.deleteFrom("data_source_sync_runs").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("data_source_event_mappings").where("source_id", "in", sourceIds).execute();
+      await db.deleteFrom("source_records").where("source_id", "in", sourceIds).execute();
+      await db.deleteFrom("source_sync_runs").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("events").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("data_sources").where("id", "in", sourceIds).execute();
     }

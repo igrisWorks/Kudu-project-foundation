@@ -158,12 +158,18 @@ test("SQLite Local persists assets, sources, microsecond events, mappings, file 
       await mapping(source.id, undefined, mappedIndustrialPayload);
       const imported = await call("POST", `/api/v1/data-sources/${source.id}/import`, undefined, 200);
       assert.equal(imported.imported, 1, JSON.stringify(imported));
+      assert.equal(imported.failed, 0, JSON.stringify(imported));
       const fileEvents = await call("GET", `/api/v1/events?sourceKey=${format}`);
       const fileEvent = await call("GET", `/api/v1/events/${fileEvents.items[0].id}`);
       assert.equal(fileEvent.payload.status, "running");
       assert.equal(fileEvent.payload.measurementValue, format === "json" ? 31 : "32");
       assert.deepEqual(fileEvent.payload.measurements, nestedMeasurements);
-      assert.deepEqual(fileEvent.provenance.originalRecord.payload.measurements, nestedMeasurements);
+      if (format === "json") {
+        assert.deepEqual(fileEvent.provenance.originalRecord.payload.measurements, nestedMeasurements);
+      } else {
+        assert.equal(typeof fileEvent.provenance.originalRecord.payload, "string");
+        assert.deepEqual(JSON.parse(fileEvent.provenance.originalRecord.payload).measurements, nestedMeasurements);
+      }
     }
     const restConfig = {
       kind: "rest_api",

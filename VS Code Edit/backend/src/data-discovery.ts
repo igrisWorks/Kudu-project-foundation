@@ -2,6 +2,7 @@ import type {
   DataSourceConfigurationInput,
   DataSourceDiscoveryResult,
   DataSourceType,
+  EventMappingDefinition,
   DiscoveredStructure,
   DiscoveredStructureField,
   DiscoveredField,
@@ -102,7 +103,7 @@ const aliases: Record<SuggestedTargetField, TargetAliasDefinition> = {
     label: "Severity", required: false, shape: "scalar",
   },
   errorCode: {
-    names: { faultcode: 0.98, errorcode: 0.98, alarmcode: 0.95, diagnosticcode: 0.95, eventcode: 0.83, code: 0.7 },
+    names: { faultcode: 0.98, errorcode: 0.98, alarmcode: 0.95, diagnosticcode: 0.95, eventcode: 0.83, number: 0.72, code: 0.7 },
     label: "Error code", required: false, shape: "scalar",
   },
   assetName: {
@@ -640,6 +641,58 @@ function toPreview(
     const rejected = issues.some(issue => /must be|not a supported|repeats/i.test(issue));
     return { recordNumber: index + 1, state: rejected ? "rejected" : issues.length ? "warning" : "valid", issues, values, normalized };
   });
+}
+
+export function recognizeSourceRecords(
+  sourceType: DataSourceType,
+  inputRecords: Record<string, unknown>[],
+  sourceTimezone?: string,
+): DataSourceDiscoveryResult {
+  const records = inputRecords.slice(0, MAX_PREVIEW_RECORDS);
+  const inspectedFields = collectLeafFields(records, sourceType === "csv_file", sourceTimezone);
+  const fields: DiscoveredField[] = inspectedFields.map(({ path, valueType, examples }) => ({ path, valueType, examples }));
+  const suggestions = makeSuggestions(inspectedFields, records.length);
+  const structures = collectStructures(records, sourceType === "csv_file");
+  const warnings: string[] = [];
+  if (!records.length) warnings.push("No source records are available to inspect.");
+  if (structures.some(structure => structure.kind === "array")) {
+    warnings.push("Nested arrays are summarized for review, not flattened into event fields.");
+  }
+  if (fields.length >= MAX_DISCOVERY_FIELDS) warnings.push("The field preview was capped; remaining fields stay in the original record.");
+  if (fields.length) warnings.push("Sensitive-looking field values are hidden in examples.");
+  return {
+    sourceType: sourceType as DataSourceDiscoveryResult["sourceType"],
+    sampledPageCount: 1,
+    recordPaths: [{ path: "$", recordCount: inputRecords.length, supported: true }],
+    selectedRecordPath: inputRecords.length ? "$" : null,
+    fields,
+    suggestions,
+    structures,
+    preview: toPreview(records, fields, suggestions, sourceTimezone),
+    warnings,
+  };
+}
+
+export function automaticEventDefinition(
+  recognition: DataSourceDiscoveryResult,
+): EventMappingDefinition | null {
+  const pathFor = (target: SuggestedTargetField) =>
+    recognition.suggestions.find(suggestion => suggestion.target === target)?.sourcePath ?? undefined;
+  const eventType = pathFor("eventType");
+  const occurredAt = pathFor("occurredAt");
+  if (!eventType || !occurredAt) return null;
+  const payload: Record<string, string> = {};
+  for (const target of SUGGESTED_PAYLOAD_TARGETS) {
+    const sourcePath = pathFor(target);
+    if (sourcePath) payload[target] = sourcePath;
+  }
+  const sourceRecordId = pathFor("sourceRecordId");
+  return {
+    eventType,
+    occurredAt,
+    ...(sourceRecordId ? { sourceRecordId } : {}),
+    ...(Object.keys(payload).length ? { payload } : {}),
+  };
 }
 
 export function buildDiscoveryResult(

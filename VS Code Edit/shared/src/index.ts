@@ -411,7 +411,7 @@ export type RestSyncRunStatus = "running" | "completed" | "paused" | "failed";
 export interface RestSyncResult {
   runId: string;
   sourceId: string;
-  mappingVersion: number;
+  mappingVersion: number | null;
   status: RestSyncRunStatus;
   requestSucceeded: boolean;
   pagesCompleted: number;
@@ -451,6 +451,46 @@ export interface ExplorerEventQuery {
   pageSize?: number;
   sortBy?: "occurredAt" | "eventType" | "source";
   sortDirection?: "asc" | "desc";
+}
+
+export interface ExplorerRecordQuery {
+  sourceId?: string;
+  search?: string;
+  page: number;
+  pageSize: number;
+  sortBy?: "ingestedAt" | "source" | "status";
+  sortDirection?: "asc" | "desc";
+}
+
+export type SourceRecordProcessingStatus = "raw_only" | "normalized" | "legacy_event";
+
+export interface ExplorerRecordEventSummary {
+  id: string;
+  eventType: string;
+  occurredAt: string;
+}
+
+export interface ExplorerRecordSummary {
+  id: string;
+  source: EventSourceReference;
+  sourceRecordId: string | null;
+  deduplicationKey: string | null;
+  ingestedAt: string;
+  processingStatus: SourceRecordProcessingStatus;
+  normalizedEvent: ExplorerRecordEventSummary | null;
+  fieldCount: number;
+  fieldNames: string[];
+  preview: Record<string, string>;
+}
+
+export interface ExplorerRecordDetail extends ExplorerRecordSummary {
+  rawRecord: JsonObject;
+  missingFields: string[];
+  provenance: JsonObject;
+}
+
+export interface ExplorerRecordPage extends Page<ExplorerRecordSummary> {
+  recognition: DataSourceDiscoveryResult | null;
 }
 
 export interface ExplorerQualityField {

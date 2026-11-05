@@ -1,5 +1,5 @@
 - [Docker runtime checks](docker-runtime-checks.md) — this workspace can block container exec/health checks and bridge DNS; host networking worked for registry access.
-- [Opt-in event mapping](event-mapping-boundary.md) — shared REST/JSON/CSV recognition; preserve legacy no-map behavior and keep nested source data intact.
+- [Data-first ingestion and mappings](event-mapping-boundary.md) — persist source records without mandatory mapping; normalize only with safe evidence or an approved mapping.
 - [Private-network REST access](private-network-rest.md) — private factory/corporate APIs require explicit host trust without weakening SSRF, origin, or auth protections.
 - [Desktop dependency isolation](desktop-build-isolation.md) — keep Electron tools outside the root workspace so server Docker installs stay unchanged.
 - [AppImage sandbox defaults](desktop-appimage-sandbox.md) — inspect launch arguments and fail closed if the Chromium sandbox cannot be used.

@@ -24,17 +24,42 @@ test(
       await runMigrations(pool, migrationsDirectory);
       assert.deepEqual(await runMigrations(pool, migrationsDirectory), []);
       const result = await pool.query<{ name: string }>(
-        "SELECT name FROM kudu.schema_migrations WHERE name IN ($1, $2, $3) ORDER BY name",
-        ["0001_create_kudu_schema.sql", "0002_asset_and_data_source_registries.sql", "0005_data_source_sync_runs.sql"],
+        "SELECT name FROM kudu.schema_migrations WHERE name IN ($1, $2, $3, $4) ORDER BY name",
+        [
+          "0001_create_kudu_schema.sql",
+          "0002_asset_and_data_source_registries.sql",
+          "0005_data_source_sync_runs.sql",
+          "0006_raw_source_records.sql",
+        ],
       );
       assert.deepEqual(
         result.rows.map((row) => row.name),
-        ["0001_create_kudu_schema.sql", "0002_asset_and_data_source_registries.sql", "0005_data_source_sync_runs.sql"],
+        [
+          "0001_create_kudu_schema.sql",
+          "0002_asset_and_data_source_registries.sql",
+          "0005_data_source_sync_runs.sql",
+          "0006_raw_source_records.sql",
+        ],
       );
-      const table = await pool.query<{ table_name: string | null }>(
-        "SELECT to_regclass('kudu.data_source_sync_runs')::text AS table_name",
+      const tables = await pool.query<{ legacy: string | null; current: string | null }>(
+        "SELECT to_regclass('kudu.data_source_sync_runs')::text AS legacy, to_regclass('kudu.source_sync_runs')::text AS current",
       );
-      assert.equal(table.rows[0]?.table_name, "kudu.data_source_sync_runs");
+      assert.deepEqual(tables.rows[0], {
+        legacy: "data_source_sync_runs",
+        current: "source_sync_runs",
+      });
+      const mappingNullability = await pool.query<{ table_name: string; is_nullable: string }>(
+        `SELECT table_name, is_nullable
+         FROM information_schema.columns
+         WHERE table_schema = 'kudu'
+           AND table_name IN ('data_source_sync_runs', 'source_sync_runs')
+           AND column_name = 'mapping_version'
+         ORDER BY table_name`,
+      );
+      assert.deepEqual(mappingNullability.rows, [
+        { table_name: "data_source_sync_runs", is_nullable: "NO" },
+        { table_name: "source_sync_runs", is_nullable: "YES" },
+      ]);
     } finally {
       await pool.end();
     }

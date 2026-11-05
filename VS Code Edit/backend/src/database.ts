@@ -80,6 +80,25 @@ interface EventsTable {
   provenance: ColumnType<JsonObject, string, string>;
 }
 
+interface SourceRecordsTable {
+  id: Generated<string>;
+  source_id: string;
+  source_record_id: string | null;
+  deduplication_key: string;
+  ingestion_fingerprint: string;
+  raw_record: ColumnType<JsonObject, string, string>;
+  raw_bytes: number;
+  field_count: number;
+  field_names: ColumnType<string[], string, string>;
+  preview: ColumnType<Record<string, string>, string, string>;
+  provenance: ColumnType<JsonObject, string, string>;
+  processing_status: "raw_only" | "normalized";
+  normalized_event_id: string | null;
+  sync_run_id: string | null;
+  mapping_version: number | null;
+  ingested_at: TimestampColumn;
+}
+
 interface DataSourceEventMappingsTable {
   id: Generated<string>;
   source_id: string;
@@ -115,12 +134,18 @@ interface DataSourceSyncRunsTable {
   completed_at: TimestampColumn | null;
 }
 
+interface SourceSyncRunsTable extends Omit<DataSourceSyncRunsTable, "mapping_version"> {
+  mapping_version: number | null;
+}
+
 export interface Database {
   assets: AssetsTable;
   data_sources: DataSourcesTable;
   events: EventsTable;
+  source_records: SourceRecordsTable;
   data_source_event_mappings: DataSourceEventMappingsTable;
   data_source_sync_runs: DataSourceSyncRunsTable;
+  source_sync_runs: SourceSyncRunsTable;
 }
 
 export function createDatabase(connectionString: string): {

@@ -2,6 +2,10 @@ import ExcelJS from "exceljs";
 import type {
   EventDetail,
   ExplorerEventQuery,
+  ExplorerRecordDetail,
+  ExplorerRecordPage,
+  ExplorerRecordQuery,
+  ExplorerRecordSummary,
   ExplorerQualityReport,
   ExplorerSchemaChange,
   ExplorerSourceQuality,
@@ -11,8 +15,10 @@ import type {
 } from "@kudu/shared";
 import type { FastifyInstance } from "fastify";
 import { sql, type Kysely } from "kysely";
-import type { Database } from "./database.js";
+import type { Database, StoredSourceConfiguration } from "./database.js";
 import { ApiFailure } from "./errors.js";
+import { recognizeSourceRecords } from "./data-discovery.js";
+import { readMappedField } from "./event-mappings.js";
 import { validateEventListFilters } from "./event-validation.js";
 import { isSqliteDatabase, sqliteTimestamp } from "./sqlite-database.js";
 
@@ -22,6 +28,8 @@ const MAX_QUALITY_SOURCES = 50;
 const QUALITY_WINDOW = 25;
 const MAX_QUALITY_FIELDS = 500;
 const EXCEL_CELL_CHUNK = 30_000;
+const MAX_EXPORT_RECORDS = 10_000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface ExplorerRow {
   id: string;

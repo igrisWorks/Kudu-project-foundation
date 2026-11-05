@@ -2,13 +2,27 @@ import { pathToFileURL } from "node:url";
 import { Pool, type QueryResult } from "pg";
 import { createSqliteDatabase, lockSqliteWrite, sqliteTimestamp, verifySqliteIntegrity } from "./sqlite-database.js";
 
-const tables = ["assets", "data_sources", "events", "data_source_event_mappings"] as const;
-const jsonFields = new Set(["external_identifiers", "configuration", "payload", "provenance", "definition", "validation_errors"]);
+const tables = [
+  "assets",
+  "data_sources",
+  "events",
+  "data_source_event_mappings",
+  "data_source_sync_runs",
+  "source_sync_runs",
+  "source_records",
+] as const;
+const jsonFields = new Set([
+  "external_identifiers", "configuration", "payload", "provenance", "definition", "validation_errors",
+  "checkpoint", "errors", "raw_record", "field_names", "preview",
+]);
 const timestampFields: Record<(typeof tables)[number], string[]> = {
   assets: ["created_at", "updated_at", "archived_at"],
   data_sources: ["created_at", "updated_at", "last_successful_sync_at"],
   events: ["occurred_at", "ingested_at"],
   data_source_event_mappings: ["created_at", "updated_at", "validated_at", "activated_at"],
+  data_source_sync_runs: ["started_at", "updated_at", "completed_at"],
+  source_sync_runs: ["started_at", "updated_at", "completed_at"],
+  source_records: ["ingested_at"],
 };
 
 /** Explicit, read-only source import. Never runs during normal Local startup. */

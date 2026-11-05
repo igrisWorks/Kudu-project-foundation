@@ -643,18 +643,21 @@ export function registerRegistryRoutes(app: FastifyInstance, db: Kysely<Database
         : await sourceQuery().forUpdate().executeTakeFirst();
       if (!source) throw new ApiFailure(404, "NOT_FOUND", "Data source not found.");
 
-      const [events, mappings, syncRuns] = await Promise.all([
+      const [events, mappings, syncRuns, sourceRecords] = await Promise.all([
         transaction.selectFrom("events").select((eb) => eb.fn.countAll<number>().as("total"))
           .where("source_id", "=", id).executeTakeFirstOrThrow(),
         transaction.selectFrom("data_source_event_mappings").select((eb) => eb.fn.countAll<number>().as("total"))
           .where("source_id", "=", id).executeTakeFirstOrThrow(),
-        transaction.selectFrom("data_source_sync_runs").select((eb) => eb.fn.countAll<number>().as("total"))
+        transaction.selectFrom("source_sync_runs").select((eb) => eb.fn.countAll<number>().as("total"))
+          .where("source_id", "=", id).executeTakeFirstOrThrow(),
+        transaction.selectFrom("source_records").select((eb) => eb.fn.countAll<number>().as("total"))
           .where("source_id", "=", id).executeTakeFirstOrThrow(),
       ]);
       const preserved = {
         events: Number(events.total),
         mappings: Number(mappings.total),
         syncRuns: Number(syncRuns.total),
+        sourceRecords: Number(sourceRecords.total),
       };
       const hasHistory = Object.values(preserved).some((count) => count > 0);
       if (hasHistory) {

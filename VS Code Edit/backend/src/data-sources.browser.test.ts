@@ -380,7 +380,7 @@ test(
     assert.equal(preservedAfterAssetDelete?.asset_id, null);
     assert.deepEqual(preservedAfterAssetDelete?.payload, { original: "preserve-me" });
 
-    const syncHistoryBeforeRemoval = await manager.db.selectFrom("data_source_sync_runs").select("id").where("source_id", "=", templateSourceId).execute();
+    const syncHistoryBeforeRemoval = await manager.db.selectFrom("source_sync_runs").select("id").where("source_id", "=", templateSourceId).execute();
     const sourceEventsBeforeRemoval = await manager.db.selectFrom("events").select("id").where("source_id", "=", templateSourceId).execute();
     assert.ok(syncHistoryBeforeRemoval.length > 0 && sourceEventsBeforeRemoval.length > 0);
     const sourceIdentity = await manager.db.selectFrom("data_sources")
@@ -450,9 +450,25 @@ test(
 
     await evaluate("window.location.href = '/data-explorer'; true");
     await waitFor("data explorer page", `document.querySelector('h1')?.innerText === 'Data explorer'`);
+    await waitFor("persisted source records", `Boolean(document.querySelector('[data-testid^="button-select-record-"]'))`);
+    await waitFor("original source record inspector", `Boolean(document.querySelector('[data-testid="tree-source-record"]'))`);
+    await evaluate(`document.querySelectorAll('[data-testid="tree-source-record"] details').forEach(node => { node.open = true; }); true`);
+    assert.match(
+      await evaluate(`document.querySelector('[data-testid="tree-source-record"]')?.innerText ?? ''`),
+      /measurements|readings/i,
+    );
+    assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="source-record-visualization"]'))`));
+    await click('[data-testid="button-record-raw"]');
+    assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="json-source-record"]'))`));
+    await click('[data-testid="button-record-tree"]');
+    await click('[data-testid="source-record-visualization"] .dw-visualization-head button');
+    await waitFor("raw-record time-series chart", `Boolean(document.querySelector('[data-testid="source-time-chart"]'))`);
+    await setValue('[data-testid="select-chart-kind"]', "category");
+    await waitFor("source-record category fields", `document.querySelector('[data-testid="select-chart-category-field"]')?.options.length > 0`);
+    await setValue('[data-testid="select-chart-category-field"]', await evaluate(`document.querySelector('[data-testid="select-chart-category-field"]')?.options[0]?.value ?? ''`));
+    await waitFor("source-record category counts", `Boolean(document.querySelector('[data-testid="source-category-chart"]'))`);
+    await click('[data-testid="button-mode-events"]');
     await waitFor("persisted event rows", `Boolean(document.querySelector('[data-testid^="button-select-event-"]'))`);
-    await waitFor("payload tree inspector", `Boolean(document.querySelector('[data-testid="tree-event-payload"]'))`);
-    await waitFor("selected field export controls", `Boolean(document.querySelector('[data-testid="button-export-selected-fields"]'))`);
     assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="select-explorer-sort-by"]'))`));
     const nestedRecordButton = await evaluate(`(() => {
       const row = [...document.querySelectorAll('.dw-event-table tbody tr')].find(item => item.innerText.includes('Browser Milestone 2 Fixture'));
@@ -460,12 +476,11 @@ test(
     })()`);
     assert.ok(nestedRecordButton, "the browser fixture with nested measurement records must be present");
     await click(`[data-testid="${nestedRecordButton}"]`);
-    await waitFor("nested object child table", `Boolean(document.querySelector('[data-testid="related-record-tables"]'))`);
+    await waitFor("normalized event payload", `Boolean(document.querySelector('[data-testid="json-event-payload"]'))`);
+    await waitFor("selected field export controls", `Boolean(document.querySelector('[data-testid="button-export-selected-fields"]'))`);
     const explorerSummary = await evaluate(`document.querySelector('.dw-event-table')?.innerText ?? ''`);
     assert.ok(explorerSummary.trim().length > 20, "the table renders persisted event values and source attribution");
     assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="explorer-quality-report"]'))`));
-    await click('[data-testid="button-payload-raw"]');
-    assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="json-event-payload"]'))`));
 
     await evaluate("window.location.href = '/visualisations'; true");
     await waitFor("saved visualisations page", `document.querySelector('h1')?.innerText === 'Visualisations'`);

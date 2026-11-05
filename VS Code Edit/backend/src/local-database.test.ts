@@ -30,7 +30,7 @@ test("Local SQLite initializes, preserves typed values, backs up, restores and s
     assert.deepEqual(source.configuration, { kind: "manual" });
     assert.ok(source.created_at instanceof Date);
     assert.equal((await manager.status()).integrity, "ok");
-    assert.equal((await manager.status()).schemaVersion, "0002");
+    assert.equal((await manager.status()).schemaVersion, "0003");
     const backup = await manager.createBackup();
     await manager.db.updateTable("data_sources").set({ display_name: "Changed", enabled: false }).execute();
     assert.equal((await manager.db.selectFrom("data_sources").select("enabled").executeTakeFirstOrThrow()).enabled, false);
@@ -68,6 +68,79 @@ test("applied SQLite migrations reject changed checksums without resetting data"
   } finally { raw.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("the raw-record migration adds sync history without replacing legacy tables", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "kuduns-sqlite-forward-migration-"));
+  const legacyMigrations = join(directory, "legacy-migrations");
+  const currentMigrations = fileURLToPath(new URL("../../database/sqlite-migrations/", import.meta.url));
+  await mkdir(legacyMigrations);
+  const raw = new BetterSqlite3(":memory:");
+  try {
+    for (const name of ["0001_initial_local_schema.sql", "0002_data_source_sync_runs.sql"]) {
+      await writeFile(join(legacyMigrations, name), await readFile(join(currentMigrations, name)));
+    }
+    await runSqliteMigrations(raw, legacyMigrations);
+    raw.prepare("INSERT INTO data_sources (id, source_key, display_name, source_type) VALUES (?, ?, ?, ?)")
+      .run("source-before-upgrade", "source-before-upgrade", "Source before upgrade", "rest_api");
+    raw.prepare(`INSERT INTO data_source_sync_runs
+      (id, source_id, mapping_version, status, config_fingerprint, checkpoint, pages_completed, fetched, imported, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run("run-before-upgrade", "source-before-upgrade", 3, "completed", "a".repeat(64),
+        '{"cursor":"preserve-me"}', 2, 4, 4, "2026-11-05T10:00:00.000Z");
+
+    const applied = await runSqliteMigrations(raw, currentMigrations);
+    assert.deepEqual(applied, ["0003_raw_source_records.sql"]);
+    const migrationSql = await readFile(join(currentMigrations, "0003_raw_source_records.sql"), "utf8");
+    assert.doesNotMatch(migrationSql, /\b(?:DROP\s+TABLE|ALTER\s+TABLE)\b/i);
+    const oldRun = raw.prepare(
+      "SELECT mapping_version, checkpoint, pages_completed, imported FROM data_source_sync_runs WHERE id = ?",
+    ).get("run-before-upgrade") as { mapping_version: number; checkpoint: string; pages_completed: number; imported: number };
+    assert.deepEqual(oldRun, {
+      mapping_version: 3,
+      checkpoint: '{"cursor":"preserve-me"}',
+      pages_completed: 2,
+      imported: 4,
+    });
+    const copiedRun = raw.prepare(
+      "SELECT mapping_version, checkpoint, pages_completed, imported FROM source_sync_runs WHERE id = ?",
+    ).get("run-before-upgrade") as { mapping_version: number | null; checkpoint: string; pages_completed: number; imported: number };
+    assert.deepEqual(copiedRun, oldRun);
+    assert.equal(
+      (raw.prepare("PRAGMA table_info(data_source_sync_runs)").all() as { name: string; notnull: number }[])
+        .find((column) => column.name === "mapping_version")?.notnull,
+      1,
+    );
+    raw.prepare(`INSERT INTO source_sync_runs
+      (id, source_id, mapping_version, status, config_fingerprint, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .run("unmapped-run-after-upgrade", "source-before-upgrade", null, "completed", "b".repeat(64), "2026-11-05T10:01:00.000Z");
+    assert.equal(
+      (raw.prepare("SELECT mapping_version FROM source_sync_runs WHERE id = ?")
+        .get("unmapped-run-after-upgrade") as { mapping_version: number | null }).mapping_version,
+      null,
+    );
+    raw.prepare("SELECT * FROM source_records").all();
+    assert.equal((raw.pragma("integrity_check") as { integrity_check: string }[])[0]?.integrity_check, "ok");
+    assert.deepEqual(raw.pragma("foreign_key_check"), []);
+  } finally {
+    raw.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("PostgreSQL and SQLite raw-record migrations contain no destructive table DDL", async () => {
+  const sqliteMigration = await readFile(
+    new URL("../../database/sqlite-migrations/0003_raw_source_records.sql", import.meta.url),
+    "utf8",
+  );
+  const postgresMigration = await readFile(
+    new URL("../../database/migrations/0006_raw_source_records.sql", import.meta.url),
+    "utf8",
+  );
+  for (const migration of [sqliteMigration, postgresMigration]) {
+    assert.doesNotMatch(migration, /\b(?:DROP|ALTER|TRUNCATE|RENAME)\b/i);
+  }
+});
+
 test("existing SQLite data with Windows line-ending checksums starts without changing records or backups", async () => {
   const directory = await mkdtemp(join(tmpdir(), "kuduns-crlf-migration-"));
   const legacyMigrations = join(directory, "legacy-migrations");
@@ -75,8 +148,9 @@ test("existing SQLite data with Windows line-ending checksums starts without cha
   const currentMigrations = fileURLToPath(new URL("../../database/sqlite-migrations/", import.meta.url));
   await mkdir(legacyMigrations);
   let handle: Awaited<ReturnType<typeof createSqliteDatabase>> | undefined;
+  let legacyRaw: BetterSqlite3.Database | undefined;
   try {
-    const migrationNames = (await readdir(currentMigrations)).filter((name) => name.endsWith(".sql")).sort();
+    const migrationNames = ["0001_initial_local_schema.sql", "0002_data_source_sync_runs.sql"];
     const legacyContents = new Map<string, string>();
     for (const name of migrationNames) {
       const contents = (await readFile(join(currentMigrations, name), "utf8")).replace(/\r\n?/g, "\n");
@@ -85,10 +159,11 @@ test("existing SQLite data with Windows line-ending checksums starts without cha
       await writeFile(join(legacyMigrations, name), windowsContents);
     }
 
-    handle = await createSqliteDatabase(dataDirectory, {
-      KUDU_SQLITE_MIGRATIONS_DIR: legacyMigrations,
-    });
-    const { raw } = handle;
+    await mkdir(dataDirectory, { recursive: true });
+    legacyRaw = new BetterSqlite3(join(dataDirectory, "kuduns.db"));
+    legacyRaw.pragma("foreign_keys = ON");
+    await runSqliteMigrations(legacyRaw, legacyMigrations);
+    const raw = legacyRaw;
     raw.prepare("INSERT INTO assets (id, asset_key, name, asset_type) VALUES (?, ?, ?, ?)")
       .run("asset-existing", "asset-existing", "Existing asset", "machine");
     raw.prepare("INSERT INTO data_sources (id, source_key, display_name, source_type) VALUES (?, ?, ?, ?)")
@@ -111,11 +186,11 @@ test("existing SQLite data with Windows line-ending checksums starts without cha
       const checksum = createHash("sha256").update(contents).digest("hex");
       raw.prepare("UPDATE app_schema_migrations SET checksum = ? WHERE name = ?").run(checksum, name);
     }
-    const backupPath = join(handle.backupsDirectory, "existing-backup.db");
+    const backupPath = join(directory, "existing-backup.db");
     await raw.backup(backupPath);
     const backupBefore = await readFile(backupPath);
-    await handle.close();
-    handle = undefined;
+    raw.close();
+    legacyRaw = undefined;
 
     handle = await createSqliteDatabase(dataDirectory, {
       KUDU_SQLITE_MIGRATIONS_DIR: currentMigrations,
@@ -135,9 +210,12 @@ test("existing SQLite data with Windows line-ending checksums starts without cha
       .get("mapping-existing") as { definition: string } | undefined)?.definition, '{"mapping":"preserved"}');
     assert.equal((handle.raw.prepare("SELECT status FROM data_source_sync_runs WHERE id = ?")
       .get("sync-existing") as { status: string } | undefined)?.status, "completed");
+    assert.equal((handle.raw.prepare("SELECT status FROM source_sync_runs WHERE id = ?")
+      .get("sync-existing") as { status: string } | undefined)?.status, "completed");
     assert.deepEqual(await readFile(backupPath), backupBefore);
     assert.equal((handle.raw.pragma("integrity_check") as { integrity_check: string }[])[0]?.integrity_check, "ok");
   } finally {
+    legacyRaw?.close();
     await handle?.close();
     await rm(directory, { recursive: true, force: true });
   }

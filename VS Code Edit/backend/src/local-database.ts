@@ -45,6 +45,22 @@ const dataTables = [
       "errors_truncated", "last_error_code", "started_at", "updated_at", "completed_at",
     ],
   },
+  {
+    name: "source_sync_runs",
+    columns: [
+      "id", "source_id", "mapping_version", "status", "resumable", "request_succeeded", "config_fingerprint",
+      "checkpoint", "pages_completed", "fetched", "imported", "duplicates", "failed", "errors",
+      "errors_truncated", "last_error_code", "started_at", "updated_at", "completed_at",
+    ],
+  },
+  {
+    name: "source_records",
+    columns: [
+      "id", "source_id", "source_record_id", "deduplication_key", "ingestion_fingerprint",
+      "raw_record", "raw_bytes", "field_count", "field_names", "preview", "provenance",
+      "processing_status", "normalized_event_id", "sync_run_id", "mapping_version", "ingested_at",
+    ],
+  },
 ] as const;
 
 export interface LocalDatabaseBackup {
@@ -217,7 +233,9 @@ export class LocalDatabaseManager {
       const replace = this.handle.raw.transaction(() => {
         this.handle.raw.pragma("defer_foreign_keys = ON");
         this.handle.raw.exec(`
+          DELETE FROM source_records;
           DELETE FROM events;
+          DELETE FROM source_sync_runs;
           DELETE FROM data_source_sync_runs;
           DELETE FROM data_source_event_mappings;
           DELETE FROM data_sources;

@@ -444,7 +444,12 @@ test("source registration does not connect; explicit REST and nested JSON discov
       sourceKey: "faults-json",
     }, 200);
     assert.equal(fileDiscovery.selectedRecordPath, "faults");
-    await call("POST", `/api/v1/data-sources/${fileSource.id}/import`, undefined, 409);
+    const rawImport = await call("POST", `/api/v1/data-sources/${fileSource.id}/import`, undefined, 200);
+    assert.equal(rawImport.imported, 1);
+    assert.equal(rawImport.failed, 0);
+    const rawRecords = await call("GET", `/api/v1/explorer/records?sourceId=${fileSource.id}`);
+    assert.equal(rawRecords.total, 1);
+    assert.equal(rawRecords.items[0].processingStatus, "normalized");
     await call("POST", `/api/v1/data-sources/${fileSource.id}/mappings`, {
       definition: {
         eventType: "faultType",
@@ -459,7 +464,9 @@ test("source registration does not connect; explicit REST and nested JSON discov
     await call("POST", `/api/v1/data-sources/${fileSource.id}/mappings/1/activate`, undefined, 200);
     const imported = await call("POST", `/api/v1/data-sources/${fileSource.id}/import`, undefined, 200);
     assert.equal(imported.records, 1);
-    assert.equal(imported.imported, 1);
+    assert.equal(imported.imported, 0);
+    assert.equal(imported.skipped, 1, "the existing raw record is reused instead of duplicated");
+    assert.equal((await call("GET", "/api/v1/events?sourceKey=faults-json")).total, 1);
     const importedAgain = await call("POST", `/api/v1/data-sources/${fileSource.id}/import`, undefined, 200);
     assert.equal(importedAgain.imported, 0, "the saved active mapping is reused on repeated import");
 

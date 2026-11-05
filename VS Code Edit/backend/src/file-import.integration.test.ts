@@ -34,6 +34,7 @@ async function createFixture(context: TestLifecycle) {
 
   context.after(async () => {
     if (sourceIds.length) {
+      await db.deleteFrom("source_records").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("events").where("source_id", "in", sourceIds).execute();
       await db.deleteFrom("data_sources").where("id", "in", sourceIds).execute();
     }
@@ -98,7 +99,7 @@ function csvRow(values: string[]): string {
 }
 
 test(
-  "CSV import preserves extra columns, maps optional assets, and skips identical re-imports",
+  "CSV import preserves raw fields, avoids guessed asset links, and skips identical re-imports",
   { skip: !databaseUrl },
   async (context) => {
     const { app, importDirectory, addAsset, addSource } = await createFixture(context);
@@ -140,15 +141,22 @@ test(
 
     const list = await app.inject({ method: "GET", url: `/api/v1/events?sourceId=${sourceId}` });
     assert.equal(list.json().total, 2);
-    const event = list.json().items.find((item: { sourceRecordId: string | null }) => item.sourceRecordId === "csv-row-01");
-    assert.equal(event.asset.id, assetId);
+    const event = list.json().items.find((item: { eventType: string }) => item.eventType === "alarm.raised");
+    assert.ok(event, JSON.stringify(list.json().items));
+    assert.equal(event.asset?.id, undefined, "a source asset identifier is not linked without an approved mapping");
+    const rawList = await app.inject({ method: "GET", url: `/api/v1/explorer/records?sourceId=${sourceId}` });
+    const rawDetails = await Promise.all(rawList.json().items.map((item: { id: string }) =>
+      app.inject({ method: "GET", url: `/api/v1/explorer/records/${item.id}` })));
+    const rawDetail = rawDetails.find(item => item.json().rawRecord.sourceRecordId === "csv-row-01");
+    assert.ok(rawDetail, "the source-specific identifier remains in the original CSV record");
+    assert.equal(rawDetail.json().rawRecord.assetId, assetId);
     const detail = await app.inject({ method: "GET", url: `/api/v1/events/${event.id}` });
     assert.deepEqual(detail.json().payload, { code: "E-01", machineLabel: "press-7" });
   },
 );
 
 test(
-  "JSON import reports invalid records while preserving valid records and unknown fields",
+  "JSON import preserves malformed and unmapped records without inventing event timestamps",
   { skip: !databaseUrl },
   async (context) => {
     const { app, importDirectory, addSource } = await createFixture(context);
@@ -189,16 +197,25 @@ test(
         skipped: response.json().skipped,
         failed: response.json().failed,
       },
-      { records: 3, imported: 1, skipped: 0, failed: 2 },
+      { records: 3, imported: 3, skipped: 0, failed: 0 },
     );
-    assert.equal(response.json().errors[0].record, 2);
-    assert.equal(response.json().errors[0].fields.occurredAt.length > 0, true);
-    assert.equal(response.json().errors[1].record, 3);
+    assert.deepEqual(response.json().errors, []);
 
     const list = await app.inject({ method: "GET", url: `/api/v1/events?sourceId=${sourceId}` });
-    assert.equal(list.json().total, 1);
-    const detail = await app.inject({ method: "GET", url: `/api/v1/events/${list.json().items[0].id}` });
-    assert.deepEqual(detail.json().payload, { state: "ready", vendorCode: "V-42" });
+    assert.equal(list.json().total, 0, "a mixed timestamp sample is not automatically normalized");
+    const rawList = await app.inject({ method: "GET", url: `/api/v1/explorer/records?sourceId=${sourceId}` });
+    assert.equal(rawList.json().total, 3);
+    const detailForRecord = async (sourceRecordId: string) => {
+      const item = rawList.json().items.find((candidate: { sourceRecordId: string }) => candidate.sourceRecordId === sourceRecordId);
+      assert.ok(item, `raw record ${sourceRecordId} should remain explorable`);
+      return app.inject({ method: "GET", url: `/api/v1/explorer/records/${item.id}` });
+    };
+    const first = await detailForRecord("json-row-01");
+    assert.ok(rawList.json().items.some((item: { sourceRecordId: string }) => item.sourceRecordId === "json-row-02"));
+    const malformed = await detailForRecord("json-row-02");
+    assert.equal(malformed.json().rawRecord.occurredAt, "not-a-timestamp");
+    assert.deepEqual(first.json().rawRecord.vendorCode, "V-42");
+    assert.deepEqual((await detailForRecord("json-row-03")).json().rawRecord.payload, ["not", "an", "object"]);
   },
 );
 

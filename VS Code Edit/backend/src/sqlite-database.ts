@@ -40,6 +40,9 @@ const jsonColumns = new Set([
   "external_identifiers",
   "configuration",
   "payload",
+  "raw_record",
+  "field_names",
+  "preview",
   "provenance",
   "definition",
   "validation_errors",
@@ -215,7 +218,10 @@ export function verifySqliteIntegrity(raw: BetterSqlite3.Database): void {
   if (foreignKeys.length > 0) {
     throw new Error("The local SQLite database contains foreign-key errors. The database was not reset or deleted.");
   }
-  const requiredTables = ["assets", "data_sources", "events", "data_source_event_mappings"];
+  const requiredTables = [
+    "assets", "data_sources", "events", "source_records",
+    "data_source_event_mappings", "source_sync_runs",
+  ];
   const present = new Set((raw.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table'",
   ).all() as { name: string }[]).map((row) => row.name));
