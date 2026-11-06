@@ -7,9 +7,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { LocalDatabaseManager } from "./local-database.js";
 import { createApp } from "./app.js";
+import { storeSourceRecord } from "./source-records.js";
 
 function findChromium(): string | undefined {
   const candidates = [
@@ -460,6 +462,7 @@ test(
     assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="source-record-visualization"]'))`));
     await click('[data-testid="button-record-raw"]');
     assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="json-source-record"]'))`));
+    await waitFor("tree view action restored", `Boolean(document.querySelector('[data-testid="button-record-tree"]'))`);
     await click('[data-testid="button-record-tree"]');
     await click('[data-testid="source-record-visualization"] .dw-visualization-head button');
     await waitFor("raw-record time-series chart", `Boolean(document.querySelector('[data-testid="source-time-chart"]'))`);
@@ -482,8 +485,112 @@ test(
     assert.ok(explorerSummary.trim().length > 20, "the table renders persisted event values and source attribution");
     assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="explorer-quality-report"]'))`));
 
+    const testApi2SourceId = randomUUID();
+    await manager.db.insertInto("data_sources").values({
+      id: testApi2SourceId,
+      source_key: "testapi2-raw-visualisation",
+      display_name: "testApi2 raw fixture",
+      source_type: "rest_api",
+      description: "Disposable ten-record raw-only visualisation fixture.",
+      configuration: JSON.stringify({
+        kind: "rest_api",
+        baseUrl: `http://127.0.0.1:${fixturePort}/fixture/events`,
+        sourceTimezone: "Europe/Berlin",
+      }),
+      enabled: true,
+    }).execute();
+    for (let index = 0; index < 10; index += 1) {
+      const day = index < 5 ? "18" : "19";
+      const message = index < 4 ? "Motor overload" : index < 7 ? "Sensor warning" : "Drive temperature high";
+      const rawRecord = {
+        id: `testApi2-${String(index + 1).padStart(2, "0")}`,
+        timestamp: `2025-12-${day}T09:${String(index % 5).padStart(2, "0")}:00`,
+        message,
+        number: 40 + index,
+        nullable: null,
+        faultCode: index % 2 ? "F-101" : "F-202",
+        machineName: index % 2 ? "Pump A" : "Pump B",
+        state: index % 2 === 0,
+        cams: index % 2
+          ? []
+          : [{ cameraId: `cam-${index + 1}`, image: { sequence: index + 1, quality: "original" } }],
+      };
+      await storeSourceRecord(manager.db, {
+        sourceId: testApi2SourceId,
+        sourceRecordId: rawRecord.id,
+        deduplicationKey: rawRecord.id,
+        rawRecord,
+        provenance: { connector: "rest_api", fixture: "testApi2", rawOnly: true },
+      });
+    }
+    assert.equal(
+      await manager.db.selectFrom("source_records").select(eb => eb.fn.countAll<number>().as("total"))
+        .where("source_id", "=", testApi2SourceId).executeTakeFirstOrThrow().then(row => Number(row.total)),
+      10,
+    );
+    assert.equal(
+      await manager.db.selectFrom("events").select(eb => eb.fn.countAll<number>().as("total"))
+        .where("source_id", "=", testApi2SourceId).executeTakeFirstOrThrow().then(row => Number(row.total)),
+      0,
+      "raw visualisation must not depend on normalized event rows",
+    );
+
     await evaluate("window.location.href = '/visualisations'; true");
     await waitFor("saved visualisations page", `document.querySelector('h1')?.innerText === 'Visualisations'`);
+    await waitFor("raw record mode", `Boolean(document.querySelector('[data-testid="tab-raw-record-visualisations"]'))`);
+    await setValue('[data-testid="select-raw-visualisation-source"]', testApi2SourceId);
+    await click('[data-testid="button-load-raw-visualisation-data"]');
+    await waitFor("ten original raw records loaded", `document.querySelector('[data-testid="raw-visualisation-summary"]')?.innerText.includes('Raw records loaded: 10 / 10')`);
+    const testApi2Fields = await evaluate(`document.querySelector('[data-testid="raw-field-catalog"]')?.innerText ?? ''`);
+    for (const expectedField of ["timestamp", "message", "number", "nullable", "cams"]) {
+      assert.ok(testApi2Fields.includes(expectedField), `testApi2 raw field ${expectedField} should be discoverable`);
+    }
+    assert.match(testApi2Fields, /null 10/, "observed null value types should be visible");
+    assert.match(testApi2Fields, /array 10/, "nested cams arrays should be identified without flattening");
+    const timestampFieldKey = await evaluate(`([...document.querySelector('[data-testid="select-raw-visualisation-timestamp"]').options].find(option => option.textContent?.startsWith('timestamp ·'))?.value ?? '')`);
+    const numberFieldKey = await evaluate(`([...document.querySelector('[data-testid="select-raw-visualisation-value"]').options].find(option => option.textContent?.startsWith('number ·'))?.value ?? '')`);
+    assert.ok(timestampFieldKey);
+    assert.ok(numberFieldKey);
+    await setValue('[data-testid="select-raw-visualisation-timestamp"]', timestampFieldKey);
+    await setValue('[data-testid="select-raw-visualisation-value"]', numberFieldKey);
+    await waitFor("raw time series", `Boolean(document.querySelector('[data-testid="raw-time-series-caption"]') && document.querySelector('[data-testid="raw-time-series-caption"]').innerText.includes('10 valid time/value pairs'))`);
+    const visualSourceIdentity = await evaluate(`document.querySelector('[data-testid="raw-visualisation-source-identity"]')?.innerText ?? ''`);
+    assert.match(visualSourceIdentity, /testApi2/);
+    assert.match(visualSourceIdentity, /Europe\/Berlin/);
+
+    await setValue('[data-testid="input-raw-visualisation-from"]', "2025-12-18");
+    await setValue('[data-testid="input-raw-visualisation-to"]', "2025-12-18");
+    await waitFor("source-timezone date filter", `document.querySelector('[data-testid="raw-filtered-count"]')?.innerText === '5'`);
+    await setValue('[data-testid="input-raw-visualisation-from"]', "");
+    await setValue('[data-testid="input-raw-visualisation-to"]', "");
+
+    await setValue('[data-testid="select-raw-visualisation-type"]', "frequency");
+    const messageFieldKey = await evaluate(`([...document.querySelector('[data-testid="select-raw-visualisation-category"]').options].find(option => option.textContent?.startsWith('message ·'))?.value ?? '')`);
+    assert.ok(messageFieldKey);
+    await setValue('[data-testid="select-raw-visualisation-category"]', messageFieldKey);
+    await waitFor("fault frequency chart", `Boolean(document.querySelector('[data-testid="raw-frequency-chart"]'))`);
+    await setValue('[data-testid="select-raw-visualisation-category-filter"]', "Motor overload");
+    await waitFor("raw message filter", `document.querySelector('[data-testid="raw-filtered-count"]')?.innerText === '4'`);
+    await setValue('[data-testid="input-visualisation-name"]', "testApi2 raw frequency");
+    await click('[data-testid="button-save-visualisation"]');
+    const rawSavedButton = await waitFor("saved raw visualisation", `([...document.querySelectorAll('[data-testid^="button-open-visualisation-"]')].find(button => button.innerText.includes('testApi2 raw frequency'))?.getAttribute('data-testid') ?? '')`);
+    await click(`[data-testid="${rawSavedButton}"]`);
+    await waitFor("saved raw query reloaded", `document.querySelector('[data-testid="raw-filtered-count"]')?.innerText === '4' && Boolean(document.querySelector('[data-testid="raw-frequency-chart"]'))`);
+
+    await setValue('[data-testid="select-raw-visualisation-type"]', "distribution");
+    const stateFieldKey = await evaluate(`([...document.querySelector('[data-testid="select-raw-visualisation-category"]').options].find(option => option.textContent?.startsWith('state ·'))?.value ?? '')`);
+    assert.ok(stateFieldKey);
+    await setValue('[data-testid="select-raw-visualisation-category"]', stateFieldKey);
+    await waitFor("Boolean state distribution", `document.querySelector('[data-testid="raw-distribution-chart"]')?.querySelectorAll('.dw-category-row').length === 2`);
+    await setValue('[data-testid="select-raw-visualisation-type"]', "table");
+    await waitFor("raw payload table", `document.querySelectorAll('[data-testid="raw-visualisation-table"] tbody tr').length === 10`);
+    await evaluate(`document.querySelectorAll('[data-testid="raw-visualisation-table"] details').forEach(item => { item.open = true; }); true`);
+    const rawTable = await evaluate(`document.querySelector('[data-testid="raw-visualisation-table"]')?.innerText ?? ''`);
+    assert.match(rawTable, /raw_only/);
+    assert.match(rawTable, /cams/);
+    assert.match(rawTable, /cameraId/);
+
+    await click('[data-testid="tab-event-visualisations"]');
     assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="button-load-visualisation-data"]'))`));
     assert.equal(await evaluate(`document.querySelector('[data-testid="select-visualisation-type"]')?.options.length`), 4);
     const persistedSample = await evaluate(`fetch('/api/v1/explorer/events?page=1&pageSize=1').then(response => response.json()).then(page => page.items[0] ? { sourceId: page.items[0].source.id, eventType: page.items[0].eventType } : null)`);

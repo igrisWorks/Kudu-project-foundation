@@ -136,10 +136,36 @@
 .dw-local-note strong { display: block; margin-bottom: 4px; color: #42676d; font-size: 9px; }
 .dw-viz-workbench > .dw-section-head { padding: 16px 18px 13px; }
 .dw-definition-id { color: #7e9295; font: 8px var(--mono); letter-spacing: .08em; }
+.dw-viz-mode-tabs { display: flex; gap: 7px; padding: 11px 18px; border-bottom: 1px solid #e3ebea; background: #f7faf9; }
+.dw-viz-mode-tabs button { min-height: 33px; padding: 7px 12px; border: 1px solid #d3e0de; background: #fff; color: #547075; font-size: 10px; cursor: pointer; }
+.dw-viz-mode-tabs button.active { border-color: #168389; background: #eaf5f3; color: #176e73; font-weight: 650; }
 .dw-viz-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; padding: 15px 18px; border-bottom: 1px solid #e3ebea; }
 .dw-viz-controls .field { gap: 5px; }
 .dw-viz-controls .field-hint { font-size: 8px; }
 .dw-load-field .button { width: 100%; min-height: 35px; font-size: 10px; }
+.dw-raw-viz { display: grid; gap: 12px; }
+.dw-raw-viz-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 14px 18px; border-bottom: 1px solid #e3ebea; background: #fbfdfc; }
+.dw-raw-viz-controls .field { min-width: 0; display: grid; gap: 5px; }
+.dw-raw-viz-controls .field label { color: #4e6871; font-size: 10px; }
+.dw-raw-viz-controls input, .dw-raw-viz-controls select { width: 100%; min-width: 0; min-height: 35px; padding: 6px 8px; border: 1px solid #c9d8da; border-radius: 3px; background: #fff; color: #294d52; font-size: 10px; }
+.dw-raw-load-field .button { width: 100%; min-height: 35px; font-size: 10px; }
+.dw-raw-field-catalog { margin: 0 18px; border: 1px solid #dce7e6; background: #fff; }
+.dw-raw-field-catalog > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #e7eeed; }
+.dw-raw-field-catalog .section-label { color: #69828a; }
+.dw-raw-field-catalog > div strong { color: #60797d; font-size: 9px; font-weight: 550; }
+.dw-raw-field-catalog ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; max-height: 230px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.dw-raw-field-catalog li { min-width: 0; display: grid; gap: 4px; padding: 8px 11px; border-bottom: 1px solid #edf1f0; }
+.dw-raw-field-catalog li code { overflow-wrap: anywhere; color: #315c62; font: 9px var(--mono); }
+.dw-raw-field-catalog li span { color: #849497; font: 8px var(--mono); }
+.dw-raw-field-catalog > p { padding: 10px 12px; color: #71868a; font-size: 9px; }
+.dw-raw-viz .dw-chart-panel { margin-top: 0; }
+.dw-raw-viz .dw-chart-count { min-width: 100px; }
+.dw-raw-viz .table-frame { max-height: 540px; overflow: auto; }
+.dw-raw-viz .table-frame td { vertical-align: top; }
+.dw-raw-viz .table-frame td strong, .dw-raw-viz .table-frame td small { display: block; }
+.dw-raw-viz .table-frame td small { margin-top: 4px; color: #7b9094; font: 8px var(--mono); }
+.dw-raw-viz .table-frame details summary { color: #167d83; cursor: pointer; font-size: 9px; }
+.dw-raw-viz .table-frame pre { max-width: min(600px, 55vw); max-height: 280px; overflow: auto; margin: 7px 0 0; padding: 9px; background: #f2f7f6; color: #395e65; font: 8px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .dw-subtle-status { margin: 0; padding: 9px 18px; color: #71878a; font-size: 10px; }
 .dw-provenance-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding: 9px 18px; border-bottom: 1px solid #e2eae9; background: #f4f9f8; color: #57737a; font-size: 9px; }
 .dw-provenance-strip strong { color: #365b63; font-size: 10px; }
@@ -184,6 +210,8 @@
   .dw-saved-rail { order: 2; }
   .dw-viz-workbench { order: 1; }
   .dw-viz-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dw-raw-viz-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dw-raw-field-catalog ul { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 560px) {
   .dw-page-topline { align-items: flex-start; }
@@ -196,7 +224,9 @@
   .dw-export-actions { gap: 0; }
   .dw-section-head { align-items: flex-start; }
   .dw-viz-controls { grid-template-columns: minmax(0, 1fr); padding: 13px; }
+  .dw-raw-viz-controls { grid-template-columns: minmax(0, 1fr); padding: 13px; }
   .dw-viz-workbench > .dw-section-head { padding: 13px; }
+  .dw-viz-mode-tabs { padding: 10px 13px; }
   .dw-chart-panel { margin: 11px 10px 0; }
   .dw-measure-select { grid-template-columns: minmax(0, 1fr); gap: 5px; }
   .dw-time-chart { height: 205px; }
