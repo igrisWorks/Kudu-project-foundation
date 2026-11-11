@@ -62,6 +62,43 @@ test("REST configuration permits only safe HTTP metadata and environment referen
     },
   };
   assert.deepEqual(validateDataSourceCreate(input).configuration, input.configuration);
+  assert.deepEqual(
+    validateDataSourceCreate({
+      ...input,
+      configuration: {
+        kind: "rest_api",
+        baseUrl: "https://api.example.test",
+        endpointPath: "v1/forecast",
+        queryParameters: { latitude: "52.52", timezone: "Europe/Berlin" },
+      },
+    }).configuration,
+    {
+      kind: "rest_api",
+      baseUrl: "https://api.example.test",
+      endpointPath: "v1/forecast",
+      queryParameters: { latitude: "52.52", timezone: "Europe/Berlin" },
+    },
+  );
+  expectValidationFailure(() =>
+    validateDataSourceCreate({
+      ...input,
+      configuration: {
+        kind: "rest_api",
+        baseUrl: "https://api.example.test",
+        queryParameters: { api_key: "must-not-be-stored-here" },
+      },
+    }),
+  );
+  expectValidationFailure(() =>
+    validateDataSourceCreate({
+      ...input,
+      configuration: {
+        kind: "rest_api",
+        baseUrl: "https://api.example.test",
+        queryParameters: { key: "must-not-be-stored-here" },
+      },
+    }),
+  );
 
   expectValidationFailure(() =>
     validateDataSourceCreate({

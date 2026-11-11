@@ -715,18 +715,31 @@ export function buildDiscoveryResult(
     truncated = found.truncated;
     nestedArrays = found.nestedArrays;
   }
-  const recordPaths: DiscoveryRecordPath[] = candidates.map(candidate => ({
+  const rootObjectCandidate: LocatedArray | undefined =
+    sourceType === "rest_api" &&
+    isRecord(document) &&
+    (requestedPath === "$" || candidates.length === 0)
+      ? { path: "$", rows: [document], count: 1, supported: true }
+      : undefined;
+  const availableCandidates = rootObjectCandidate
+    ? [...candidates, rootObjectCandidate]
+    : candidates;
+  const recordPaths: DiscoveryRecordPath[] = availableCandidates.map(candidate => ({
     path: candidate.path,
     recordCount: candidate.count,
     supported: candidate.supported,
   }));
   const selectedRecordPath = requestedPath
-    ? candidates.find(candidate => candidate.path === requestedPath && candidate.supported)?.path ?? null
-    : candidates.length === 1 && candidates[0]!.supported ? candidates[0]!.path : null;
+    ? availableCandidates.find(candidate => candidate.path === requestedPath && candidate.supported)?.path ?? null
+    : candidates.length === 1 && candidates[0]!.supported
+      ? candidates[0]!.path
+      : candidates.length === 0 && rootObjectCandidate
+        ? "$"
+        : null;
   if (requestedPath && !selectedRecordPath) {
     throw new ApiFailure(400, "DISCOVERY_PATH_INVALID", "Choose one of the supported record collections shown in the discovery results.");
   }
-  const selected = selectedRecordPath ? candidates.find(candidate => candidate.path === selectedRecordPath) : undefined;
+  const selected = selectedRecordPath ? availableCandidates.find(candidate => candidate.path === selectedRecordPath) : undefined;
   const records = selected?.rows.slice(0, MAX_PREVIEW_RECORDS) ?? [];
   const inspectedFields = collectLeafFields(records, sourceType === "csv_file", sourceTimezone);
   const fields: DiscoveredField[] = inspectedFields.map(({ path, valueType, examples }) => ({ path, valueType, examples }));
@@ -737,7 +750,7 @@ export function buildDiscoveryResult(
   if (nestedArrays) warnings.push("Nested arrays inside sample records are not flattened automatically. Review their structure before mapping.");
   if (recordPaths.some(path => !path.supported)) warnings.push("Some record collections use paths that cannot be represented safely by the current mapping format.");
   if (candidates.length > 1 && !selectedRecordPath) warnings.push("Choose a record collection before reviewing its fields.");
-  if (!candidates.length) warnings.push("No array of records was found. Check the response structure or select a supported JSON/CSV file.");
+  if (!candidates.length && !rootObjectCandidate) warnings.push("No array of records was found. Check the response structure or select a supported JSON/CSV file.");
   if (fields.length >= MAX_DISCOVERY_FIELDS) warnings.push("The field preview was capped; remaining fields are preserved in the original record payload.");
   if (structures.some(structure => structure.kind === "array")) {
     warnings.push("Nested arrays are summarized for review, not flattened into event fields. Imports retain their original structure.");
@@ -837,7 +850,12 @@ export function registerDataDiscoveryRoutes(
       ? validated.configuration.sourceTimezone
       : undefined;
     let discovery = buildDiscoveryResult(sourceType, document, requestedPath, sourceTimezone);
-    if (sourceType === "rest_api" && restConfiguration?.pagination && discovery.result.selectedRecordPath) {
+    if (
+      sourceType === "rest_api" &&
+      restConfiguration?.pagination &&
+      discovery.result.selectedRecordPath &&
+      !(discovery.result.selectedRecordPath === "$" && isRecord(document))
+    ) {
       const sample = await extendRestDiscoverySample(
         restConfiguration,
         document,

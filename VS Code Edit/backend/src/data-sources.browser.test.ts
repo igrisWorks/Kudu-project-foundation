@@ -217,12 +217,16 @@ test(
       const actual = await evaluate(`(() => {
         const element = document.querySelector(${JSON.stringify(selector)});
         if (!element) throw new Error('Missing field ${selector}');
-        const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+        const prototype = element instanceof HTMLSelectElement
+          ? HTMLSelectElement.prototype
+          : element instanceof HTMLTextAreaElement
+            ? HTMLTextAreaElement.prototype
+            : HTMLInputElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
         if (!setter) throw new Error('Field cannot be set ${selector}');
         setter.call(element, ${JSON.stringify(value)});
         element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
-        if (element instanceof HTMLInputElement) element.dispatchEvent(new Event('change', { bubbles: true }));
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) element.dispatchEvent(new Event('change', { bubbles: true }));
         return element.value;
       })()`);
       assert.equal(actual, value, `Could not set ${selector}.`);
@@ -236,6 +240,7 @@ test(
     await setValue('[data-testid="select-data-source-type"]', "rest_api");
     await setValue('[data-testid="input-rest-base-url"]', `http://127.0.0.1:${fixturePort}`);
     await setValue('[data-testid="input-rest-endpoint-path"]', "fixture/events");
+    await setValue('[data-testid="input-rest-query-parameters"]', JSON.stringify({ fixture: "browser" }));
     await setValue("#rest-pagination-mode", "offset");
     await setValue("#rest-page-size", "2");
     await setValue("#rest-request-interval", "0");
@@ -291,6 +296,11 @@ test(
     assert.ok(requestedOffsets.includes(8), `Expected the final empty-page probe at offset 8; saw ${requestedOffsets.join(",")}.`);
     const records = await manager.db.selectFrom("events").select("source_record_id").execute();
     assert.equal(records.length, 8);
+    const savedQueryConfiguration = await manager.db.selectFrom("data_sources")
+      .select("configuration").where("source_key", "=", "browser-m2-fixture").executeTakeFirstOrThrow();
+    assert.equal(savedQueryConfiguration.configuration.kind, "rest_api");
+    if (savedQueryConfiguration.configuration.kind !== "rest_api") assert.fail("the browser fixture should remain a REST source");
+    assert.deepEqual(savedQueryConfiguration.configuration.queryParameters, { fixture: "browser" });
 
     await evaluate("window.location.href = '/data-sources/new'; true");
     await waitFor("new data source form", "Boolean(document.querySelector('[data-testid=\"input-source-key\"]'))");
@@ -606,5 +616,163 @@ test(
     await setValue('[data-testid="input-visualisation-name"]', "Browser smoke distribution");
     await click('[data-testid="button-save-visualisation"]');
     await waitFor("saved visualisation configuration", `Boolean(document.querySelector('[data-testid^="button-open-visualisation-"]'))`);
+
+    await evaluate("window.location.href = '/help'; true");
+    await waitFor("Help & Tutorials page", `Boolean(document.querySelector('[data-testid="page-help"]'))`);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-testid^="button-help-select-tutorial-"]').length`), 14);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-testid^="card-api-test-"]').length`), 3);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-testid="panel-public-api-tests"] input[type="url"]').length`), 0);
+    assert.ok(await evaluate(`Boolean(document.querySelector('[data-testid="nav-help"]'))`));
+    await setValue('[data-testid="input-help-search"]', "daylight-saving");
+    await waitFor("searchable timezone help", `Boolean(document.querySelector('[data-testid="article-help-timezone-dst"]'))`);
+    await setValue('[data-testid="input-help-search"]', "");
+    await click('[data-testid="button-help-next"]');
+    await waitFor("tutorial progress saved", `document.querySelector('[data-testid="text-help-progress-count"]')?.innerText === 'STEP 02 OF 42'`);
+    await evaluate("window.location.reload(); true");
+    await waitFor("tutorial progress resumed", `document.querySelector('[data-testid="text-help-progress-count"]')?.innerText === 'STEP 02 OF 42'`);
+    const publicSourceCountBeforeConnection = await manager.db.selectFrom("data_sources")
+      .select(eb => eb.fn.countAll<number>().as("total")).executeTakeFirstOrThrow().then(row => Number(row.total));
+    await setValue('[data-testid="select-jsonplaceholder-endpoint"]', "posts/1/comments");
+    await evaluate(`(() => {
+      window.__publicDiscoveryCalls = 0;
+      window.__originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init = {}) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, window.location.href);
+        if (url.pathname !== '/api/v1/data-sources/discover') return window.__originalFetch(input, init);
+        window.__publicDiscoveryCalls += 1;
+        window.__publicDiscoveryRequest = JSON.parse(init.body);
+        return new Response(JSON.stringify({
+          sourceType: 'rest_api',
+          sampledPageCount: 1,
+          recordPaths: [{ path: '$', recordCount: 1, supported: true }],
+          selectedRecordPath: '$',
+          fields: [{ path: 'id', valueType: 'number', examples: ['1'] }],
+          suggestions: [],
+          structures: [],
+          preview: [],
+          warnings: []
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      };
+      return true;
+    })()`);
+    await click('[data-testid="button-test-connection-jsonplaceholder"]');
+    await waitFor("fixed-endpoint connection check", `document.querySelector('[data-testid="result-api-test-jsonplaceholder"]')?.innerText.includes('Connection and bounded discovery succeeded')`);
+    const connectionTestResult = await evaluate(`JSON.stringify({
+      calls: window.__publicDiscoveryCalls,
+      request: window.__publicDiscoveryRequest
+    })`);
+    const parsedConnectionTest = JSON.parse(connectionTestResult);
+    assert.equal(parsedConnectionTest.calls, 1);
+    assert.equal(parsedConnectionTest.request.configuration.baseUrl, "https://jsonplaceholder.typicode.com");
+    assert.equal(parsedConnectionTest.request.configuration.endpointPath, "posts/1/comments");
+    assert.equal(parsedConnectionTest.request.recordPath, "$");
+    assert.equal(
+      await manager.db.selectFrom("data_sources")
+        .select(eb => eb.fn.countAll<number>().as("total")).executeTakeFirstOrThrow().then(row => Number(row.total)),
+      publicSourceCountBeforeConnection,
+      "a connection-only check must not create a source or import records",
+    );
+    await waitFor("ingestion action enabled after connection check", `!document.querySelector('[data-testid="button-run-ingestion-jsonplaceholder"]')?.disabled`);
+    await evaluate(`(() => {
+      const sourceId = '00000000-0000-4000-8000-000000000001';
+      const recordId = '00000000-0000-4000-8000-000000000002';
+      const source = {
+        id: sourceId,
+        sourceKey: 'browser_public_api_fixture',
+        displayName: 'Browser public API fixture',
+        sourceType: 'rest_api',
+        description: null,
+        configuration: {
+          kind: 'rest_api',
+          baseUrl: 'https://jsonplaceholder.typicode.com',
+          credentialConfigured: false,
+          endpointPath: 'posts/1/comments',
+          authMode: 'none'
+        },
+        enabled: true,
+        connectionStatus: 'connected',
+        ingestionStatus: 'connected',
+        lastSuccessfulSyncAt: new Date().toISOString(),
+        lastErrorSummary: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      const rawRecord = { postId: 1, id: 1, name: 'Mock public comment', email: 'sample@example.test', body: 'Original API payload' };
+      const summary = {
+        id: recordId,
+        source: { id: sourceId, sourceKey: source.sourceKey, displayName: source.displayName },
+        sourceRecordId: 'comment-1',
+        deduplicationKey: 'comment-1',
+        ingestedAt: new Date().toISOString(),
+        processingStatus: 'raw_only',
+        normalizedEvent: null,
+        fieldCount: 5,
+        fieldNames: ['postId', 'id', 'name', 'email', 'body'],
+        preview: { postId: '1', id: '1', name: 'Mock public comment', email: 'sample@example.test', body: 'Original API payload' }
+      };
+      const detail = { ...summary, rawRecord, missingFields: [], provenance: { connector: 'rest_api' } };
+      const page = { items: [summary], total: 1, page: 1, pageSize: 100, recognition: null };
+      const jsonExport = { total: 1, items: [{ ...summary, rawRecord }] };
+      const csv = 'raw_record_json\\n"' + JSON.stringify(rawRecord).replaceAll('"', '""') + '"\\n';
+      window.__publicMockRequests = [];
+      window.fetch = async (input, init = {}) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, window.location.href);
+        const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        const reply = value => new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
+        window.__publicMockRequests.push(method + ' ' + url.pathname);
+        if (url.pathname === '/api/v1/data-sources/discover') return reply({
+          sourceType: 'rest_api',
+          sampledPageCount: 1,
+          recordPaths: [{ path: '$', recordCount: 1, supported: true }],
+          selectedRecordPath: '$',
+          fields: [{ path: 'id', valueType: 'number', examples: ['1'] }],
+          suggestions: [],
+          structures: [],
+          preview: [],
+          warnings: []
+        });
+        if (url.pathname === '/api/v1/data-sources' && method === 'POST') return reply(source);
+        if (url.pathname === '/api/v1/data-sources/' + sourceId + '/sync' && method === 'POST') return reply({
+          runId: '00000000-0000-4000-8000-000000000003',
+          sourceId,
+          mappingVersion: null,
+          status: 'completed',
+          requestSucceeded: true,
+          pagesCompleted: 1,
+          fetched: 1,
+          imported: 1,
+          duplicates: 0,
+          failed: 0,
+          errors: [],
+          errorsTruncated: false,
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          resumable: false
+        });
+        if (url.pathname === '/api/v1/explorer/records/export') {
+          return new Response(url.searchParams.get('format') === 'csv' ? csv : JSON.stringify(jsonExport), {
+            status: 200,
+            headers: { 'content-type': url.searchParams.get('format') === 'csv' ? 'text/csv' : 'application/json' }
+          });
+        }
+        if (url.pathname === '/api/v1/explorer/records/' + recordId) return reply(detail);
+        if (url.pathname === '/api/v1/explorer/records') return reply(page);
+        return window.__originalFetch(input, init);
+      };
+      return true;
+    })()`);
+    await click('[data-testid="button-run-ingestion-jsonplaceholder"]');
+    await waitFor("public API ingestion workflow", `document.querySelector('[data-testid="result-api-test-jsonplaceholder"]')?.innerText.includes('KuduNS discovery, raw ingestion, source-scoped exploration/search, JSON export, and CSV export all passed')`);
+    const ingestedApiResult = await evaluate(`JSON.stringify({
+      metrics: document.querySelector('[data-testid="metrics-api-test-jsonplaceholder"]')?.innerText ?? '',
+      requests: window.__publicMockRequests
+    })`);
+    const parsedApiResult = JSON.parse(ingestedApiResult);
+    assert.match(parsedApiResult.metrics, /1\s+new raw records/);
+    assert.match(parsedApiResult.metrics, /1\s+records retained raw-only/);
+    assert.ok(parsedApiResult.requests.includes("POST /api/v1/data-sources"));
+    assert.ok(parsedApiResult.requests.some((request: string) => request.endsWith("/sync")));
+    assert.ok(parsedApiResult.requests.includes("GET /api/v1/explorer/records/export"));
   },
 );

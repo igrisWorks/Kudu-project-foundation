@@ -22,6 +22,7 @@ export default function AppShell({
         <Link href="/data-sources" aria-current={location.startsWith("/data-sources") ? "page" : undefined} data-testid="nav-data-sources">Data sources</Link>
         <Link href="/data-explorer" aria-current={location.startsWith("/data-explorer") ? "page" : undefined} data-testid="nav-data-explorer">Data explorer</Link>
         <Link href="/visualisations" aria-current={location.startsWith("/visualisations") ? "page" : undefined} data-testid="nav-visualisations">Visualisations</Link>
+        <Link href="/help" aria-current={location.startsWith("/help") ? "page" : undefined} data-testid="nav-help">Help &amp; tutorials</Link>
         {localMode && <Link href="/settings" aria-current={location === "/settings" ? "page" : undefined} data-testid="nav-settings">Settings</Link>}
       </nav>
       <div className="rail-bottom">

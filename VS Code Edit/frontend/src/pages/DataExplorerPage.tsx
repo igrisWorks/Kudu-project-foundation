@@ -247,8 +247,15 @@ function RecognitionPanel({ recognition, loading }: { recognition: DataSourceDis
 
 export default function DataExplorerPage() {
   const [mode, setMode] = useState<ExplorerMode>("records");
-  const [recordQuery, setRecordQuery] = useState<RecordQuery>({ page: 1, pageSize: 25, sortBy: "ingestedAt", sortDirection: "desc" });
-  const [eventQuery, setEventQuery] = useState<EventQuery>({ page: 1, pageSize: 25, sortBy: "occurredAt", sortDirection: "desc" });
+  const requestedSourceId = new URLSearchParams(window.location.search).get("sourceId") || undefined;
+  const [recordQuery, setRecordQuery] = useState<RecordQuery>({
+    ...(requestedSourceId ? { sourceId: requestedSourceId } : {}),
+    page: 1, pageSize: 25, sortBy: "ingestedAt", sortDirection: "desc",
+  });
+  const [eventQuery, setEventQuery] = useState<EventQuery>({
+    ...(requestedSourceId ? { sourceId: requestedSourceId } : {}),
+    page: 1, pageSize: 25, sortBy: "occurredAt", sortDirection: "desc",
+  });
   const [draftSearch, setDraftSearch] = useState("");
   const [sources, setSources] = useState<DataSourceRecord[]>([]);
   const [sourceError, setSourceError] = useState("");

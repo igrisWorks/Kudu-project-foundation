@@ -13,7 +13,8 @@
     "start": "node --env-file-if-exists=../.env dist/index.js",
     "migrate": "node --env-file-if-exists=../.env dist/migrate.js",
     "auth:hash-password": "node --import tsx src/auth-cli.ts",
-    "test": "node --import tsx --test src/app.test.ts src/auth.integration.test.ts src/config.test.ts src/local-database.test.ts src/sqlite-workflows.test.ts src/data-discovery.test.ts src/data-first-ingestion.test.ts src/data-explorer.test.ts src/registry-validation.test.ts src/registry.integration.test.ts"
+    "test": "node --import tsx --test src/app.test.ts src/auth.integration.test.ts src/config.test.ts src/local-database.test.ts src/sqlite-workflows.test.ts src/data-discovery.test.ts src/data-first-ingestion.test.ts src/data-explorer.test.ts src/registry-validation.test.ts src/registry.integration.test.ts src/public-api.integration.test.ts src/public-api-live.integration.test.ts",
+    "test:public-apis-live": "node scripts/run-public-api-live-tests.js"
   },
   "dependencies": {
     "@fastify/static": "8.3.0",

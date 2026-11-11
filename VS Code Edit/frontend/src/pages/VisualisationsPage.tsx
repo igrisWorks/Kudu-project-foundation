@@ -103,7 +103,7 @@ export default function VisualisationsPage() {
   const [mode, setMode] = useState<"raw" | "events">("raw");
   const [activeId, setActiveId] = useState("");
   const [name, setName] = useState("");
-  const [sourceId, setSourceId] = useState("");
+  const [sourceId, setSourceId] = useState(() => new URLSearchParams(window.location.search).get("sourceId") ?? "");
   const [eventType, setEventType] = useState("");
   const [valuePath, setValuePath] = useState("");
   const [categoryPath, setCategoryPath] = useState("");

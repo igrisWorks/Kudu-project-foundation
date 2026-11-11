@@ -11,6 +11,8 @@ import NamespacePage from "./pages/NamespacePage";
 import SettingsPage from "./pages/SettingsPage";
 import DataExplorerPage from "./pages/DataExplorerPage";
 import VisualisationsPage from "./pages/VisualisationsPage";
+import HelpPage from "./pages/HelpPage";
+import PublicApiCompatibilityTests from "./pages/PublicApiCompatibilityTests";
 
 function NotFoundPage() {
   return <main className="page-main"><section className="not-found">
@@ -93,6 +95,7 @@ export default function App() {
     <Route path="/"><HomePage localMode={localMode} /></Route>
     <Route path="/data-explorer" component={DataExplorerPage} />
     <Route path="/visualisations" component={VisualisationsPage} />
+    <Route path="/help"><HelpPage><PublicApiCompatibilityTests /></HelpPage></Route>
     <Route path="/namespace" component={NamespacePage} />
     <Route path="/assets" component={AssetListPage} />
     <Route path="/assets/new"><AssetFormPage editing={false} /></Route>

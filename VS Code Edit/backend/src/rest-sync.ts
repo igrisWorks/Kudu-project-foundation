@@ -72,6 +72,18 @@ function readRetryAfter(headers: http.IncomingHttpHeaders): number | undefined {
   return Number.isNaN(date) ? undefined : Math.max(0, Math.min(date - Date.now(), 10_000));
 }
 
+function requestFailureFromError(error: Error): RestRequestError {
+  if (error instanceof RestRequestError) return error;
+  const code = (error as NodeJS.ErrnoException).code ?? "";
+  if (["ENOTFOUND", "EAI_AGAIN", "EAI_FAIL", "ENODATA"].includes(code)) {
+    return new RestRequestError("REST_DNS_FAILED", "The remote destination could not be resolved.");
+  }
+  if (/^(ERR_TLS|ERR_SSL|ERR_OSSL|ERR_CERT|CERT_|UNABLE_TO_VERIFY|DEPTH_ZERO_SELF_SIGNED|SELF_SIGNED_CERT)/i.test(code)) {
+    return new RestRequestError("REST_TLS_FAILED", "The remote TLS certificate or handshake could not be verified.");
+  }
+  return new RestRequestError("REST_REQUEST_FAILED", "The remote request failed.");
+}
+
 function makeBlockList(entries: Array<[string, number, "ipv4" | "ipv6"]>): BlockList {
   const list = new BlockList();
   for (const [address, prefix, family] of entries) list.addSubnet(address, prefix, family);
@@ -309,11 +321,7 @@ function requestOnce(
       request.destroy(new RestRequestError("REST_TIMEOUT", "The remote request timed out.", 504));
     }, timeoutMs);
     request.on("error", (error: Error) => {
-      finish(
-        error instanceof RestRequestError
-          ? error
-          : new RestRequestError("REST_REQUEST_FAILED", "The remote request failed."),
-      );
+      finish(requestFailureFromError(error));
     });
     request.end();
   });
@@ -503,6 +511,7 @@ function syncConfigFingerprint(configuration: Extract<StoredSourceConfiguration,
   return createHash("sha256").update(canonicalJson({
     baseUrl: configuration.baseUrl,
     trustedPrivateHost: configuration.trustedPrivateHost ?? "",
+    queryParameters: configuration.queryParameters ?? {},
     endpointPath: configuration.endpointPath ?? "",
     method: configuration.method ?? "GET",
     authMode: configuration.authMode ?? "none",
@@ -559,10 +568,9 @@ function recordsFromResponse(
   const records = configuration.recordsPath
     ? isRecord(value) ? readMappedField(value as JsonObject, configuration.recordsPath) : undefined
     : value;
-  if (!Array.isArray(records)) {
-    throw new RestRequestError("REST_RECORDS_PATH_INVALID", "The configured JSON path did not contain an array of records.", 400);
-  }
-  return records;
+  if (Array.isArray(records)) return records;
+  if (!configuration.recordsPath && isRecord(records)) return [records];
+  throw new RestRequestError("REST_RECORDS_PATH_INVALID", "The configured JSON path did not contain an array of records.", 400);
 }
 
 function nextCursorFromResponse(
@@ -904,7 +912,11 @@ function endpointUrl(configuration: Extract<StoredSourceConfiguration, { kind: "
   const prefix = base.pathname.replace(/\/+$/, "");
   const suffix = endpointPath.replace(/^\/+/, "");
   try {
-    return new URL(`${prefix}/${suffix}`, base.origin);
+    const endpoint = new URL(`${prefix}/${suffix}`, base.origin);
+    for (const [name, value] of Object.entries(configuration.queryParameters ?? {})) {
+      endpoint.searchParams.set(name, value);
+    }
+    return endpoint;
   } catch {
     return undefined;
   }

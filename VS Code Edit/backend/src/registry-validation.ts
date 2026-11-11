@@ -343,6 +343,40 @@ function parseQueryParameter(value: unknown, field: string, errors: Errors): str
   return value.trim();
 }
 
+const sensitiveQueryParameterName = /password|secret|token|credential|authorization|cookie|api.?key|private.?key|bearer|(^|[_-])(auth|key|signature|sig)([_-]|$)/i;
+
+function parseQueryParameters(value: unknown, errors: Errors): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!isInput(value)) {
+    errors["configuration.queryParameters"] = "Query parameters must be an object of text values.";
+    return undefined;
+  }
+  const entries = Object.entries(value);
+  if (entries.length > 32) {
+    errors["configuration.queryParameters"] = "Configure no more than 32 query parameters.";
+    return undefined;
+  }
+  const parsed: Record<string, string> = {};
+  let totalCharacters = 0;
+  for (const [name, item] of entries) {
+    const field = `configuration.queryParameters.${name}`;
+    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(name) || sensitiveQueryParameterName.test(name)) {
+      errors[field] = "Use a safe parameter name; credentials must use a bearer-token environment reference.";
+      continue;
+    }
+    if (typeof item !== "string" || item.length > 512 || /[\r\n\0]/.test(item)) {
+      errors[field] = "Use a text value up to 512 characters without line breaks.";
+      continue;
+    }
+    totalCharacters += name.length + item.length;
+    parsed[name] = item;
+  }
+  if (totalCharacters > 4096) {
+    errors["configuration.queryParameters"] = "The combined query parameters must be at most 4096 characters.";
+  }
+  return parsed;
+}
+
 function parsePagination(value: unknown, errors: Errors): RestPaginationConfiguration | undefined {
   if (value === undefined) return undefined;
   if (!isInput(value)) {
@@ -443,7 +477,7 @@ function parseConfiguration(
       value,
       [
         "kind", "baseUrl", "endpointPath", "method", "authMode", "credentialRef",
-        "trustedPrivateHost", "sourceTimezone", "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath", "pagination",
+        "trustedPrivateHost", "queryParameters", "sourceTimezone", "timeoutMs", "maxResponseBytes", "maxRecords", "responseFormat", "recordsPath", "pagination",
       ],
       errors,
     );
@@ -536,6 +570,7 @@ function parseConfiguration(
     const timeoutMs = optionalInteger(value, "timeoutMs", 500, 30_000, errors);
     const maxResponseBytes = optionalInteger(value, "maxResponseBytes", 1024, 5 * 1024 * 1024, errors);
     const maxRecords = optionalInteger(value, "maxRecords", 1, 100_000, errors);
+    const queryParameters = parseQueryParameters(value.queryParameters, errors);
     const sourceTimezone = parseSourceTimezone(value.sourceTimezone, errors);
     const recordsPath = parseRecordsPath(value.recordsPath, errors);
     const pagination = parsePagination(value.pagination, errors);
@@ -548,6 +583,7 @@ function parseConfiguration(
       ...(authMode !== undefined ? { authMode } : {}),
       ...(credentialRef !== undefined ? { credentialRef } : {}),
       ...(trustedPrivateHost !== undefined ? { trustedPrivateHost } : {}),
+      ...(queryParameters !== undefined ? { queryParameters } : {}),
       ...(sourceTimezone !== undefined ? { sourceTimezone } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),

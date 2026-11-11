@@ -24,6 +24,7 @@ export type StoredSourceConfiguration =
       authMode?: "none" | "bearer";
       credentialRef?: string;
       trustedPrivateHost?: string;
+      queryParameters?: Record<string, string>;
       sourceTimezone?: string;
       timeoutMs?: number;
       maxResponseBytes?: number;

@@ -42,6 +42,31 @@ function mapDataSourceErrors(fields: Record<string, string>): Record<string, str
   return mapped;
 }
 
+function parseQueryParametersText(value: string): Record<string, string> {
+  if (!value.trim()) return {};
+  const parsed: unknown = JSON.parse(value);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Enter a JSON object of query parameter names and text values.");
+  }
+  const entries = Object.entries(parsed);
+  if (entries.length > 32) throw new Error("Configure no more than 32 query parameters.");
+  const parameters: Record<string, string> = {};
+  let totalCharacters = 0;
+  for (const [name, item] of entries) {
+    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(name) ||
+      /password|secret|token|credential|authorization|cookie|api.?key|private.?key|bearer|(^|[_-])(auth|key|signature|sig)([_-]|$)/i.test(name)) {
+      throw new Error("Use safe parameter names; credentials belong in a bearer-token environment reference.");
+    }
+    if (typeof item !== "string" || item.length > 512 || /[\r\n\0]/.test(item)) {
+      throw new Error("Each parameter value must be text up to 512 characters without line breaks.");
+    }
+    totalCharacters += name.length + item.length;
+    parameters[name] = item;
+  }
+  if (totalCharacters > 4096) throw new Error("The combined query parameters must be at most 4096 characters.");
+  return parameters;
+}
+
 function DataSourceListPage() {
   const [search, setSearch] = useState("");
   const [sourceType, setSourceType] = useState("");
@@ -303,7 +328,8 @@ function DataSourceDetailPage() {
             <dt>Endpoint path</dt><dd className="mono">{cfg.endpointPath || "Not configured"}</dd>
             <dt>Method</dt><dd>{cfg.method ?? "GET"}</dd>
             <dt>Response format</dt><dd>{(cfg.responseFormat ?? "json").toUpperCase()}</dd>
-            <dt>Records path</dt><dd className="mono">{cfg.recordsPath || "Top-level JSON array"}</dd>
+            <dt>Records path</dt><dd className="mono">{cfg.recordsPath || "Top-level JSON array or object"}</dd>
+            {Object.keys(cfg.queryParameters ?? {}).length > 0 && <><dt>Query parameters</dt><dd>{Object.keys(cfg.queryParameters ?? {}).join(", ")}</dd></>}
             <dt>Authentication</dt><dd>{cfg.authMode === "bearer"
               ? cfg.credentialConfigured ? "Bearer token via environment variable is configured." : "Bearer token reference is unavailable."
               : cfg.credentialConfigured ? "No authentication; an inactive credential reference is recorded." : "None."}</dd>
@@ -665,7 +691,7 @@ function DiscoveryReview({
       <select value={selectedPath} onChange={event => onSelectPath(event.target.value)} data-testid="select-discovery-record-path">
         <option value="">Choose a record collection</option>
         {result.recordPaths.map(item => <option key={item.path} value={item.path} disabled={!item.supported}>
-          {item.path === "$" ? "Top-level array" : item.path} · {item.recordCount} {result.sourceType === "rest_api" ? "sampled records" : "records"}{item.supported ? "" : " · unsupported path"}
+          {item.path === "$" ? result.sourceType === "csv_file" ? "CSV rows" : "Top-level response" : item.path} · {item.recordCount} {result.sourceType === "rest_api" ? "sampled records" : "records"}{item.supported ? "" : " · unsupported path"}
         </option>)}
       </select>
     </label>
@@ -748,6 +774,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
   const [sourceKey, setSourceKey] = useState(""); const [displayName, setDisplayName] = useState("");
   const [type, setType] = useState<DataSourceType>("rest_api"); const [description, setDescription] = useState("");
   const [baseUrl, setBaseUrl] = useState(""); const [relativePath, setRelativePath] = useState("");
+  const [queryParametersText, setQueryParametersText] = useState("{}");
   const [sourceTimezone, setSourceTimezone] = useState("");
   const [endpointPath, setEndpointPath] = useState(""); const [recordsPath, setRecordsPath] = useState("");
   const [authMode, setAuthMode] = useState<RestApiAuthMode>("none");
@@ -845,6 +872,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       }
       if (clearCredential) credential.credentialRef = null;
       else if (credentialRef.trim()) credential.credentialRef = credentialRef.trim();
+      const queryParameters = parseQueryParametersText(queryParametersText);
       return {
         kind: "rest_api",
         baseUrl: baseUrl.trim(),
@@ -852,6 +880,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
         method: "GET",
         authMode,
         ...(trustPrivateHost && restHostname ? { trustedPrivateHost: restHostname } : {}),
+        ...(Object.keys(queryParameters).length ? { queryParameters } : {}),
         ...(sourceTimezone.trim() ? { sourceTimezone: sourceTimezone.trim() } : {}),
         timeoutMs: Number(timeoutMs),
         maxResponseBytes: Number(maxResponseBytes),
@@ -1005,6 +1034,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       setDescription(record.description ?? ""); setEnabled(record.enabled);
       if (record.configuration.kind === "rest_api") {
         setBaseUrl(record.configuration.baseUrl);
+        setQueryParametersText(JSON.stringify(record.configuration.queryParameters ?? {}, null, 2));
         setEndpointPath(record.configuration.endpointPath ?? "");
         setRecordsPath(record.configuration.recordsPath ?? "");
         setSourceTimezone(record.configuration.sourceTimezone ?? "");
@@ -1062,6 +1092,11 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       if (authMode === "bearer" && !credentialConfigured && !credentialRef.trim()) errors.credentialRef = "A bearer token environment-variable reference is required.";
       if (authMode === "bearer" && baseUrl.trim()) {
         try { if (new URL(baseUrl).protocol !== "https:") errors.authMode = "Bearer authentication requires HTTPS."; } catch { /* Base URL error is shown above. */ }
+      }
+      try {
+        parseQueryParametersText(queryParametersText);
+      } catch (cause) {
+        errors.queryParameters = cause instanceof Error ? cause.message : "Enter valid query parameters.";
       }
       const timeout = Number(timeoutMs); const responseLimit = Number(maxResponseBytes); const recordLimit = Number(maxRecords);
       if (!Number.isInteger(timeout) || timeout < 500 || timeout > 30000) errors.timeoutMs = "Use a whole number from 500 to 30000.";
@@ -1177,7 +1212,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
       <div className="form-grid">
         <Field label="Source key" name="source-key" value={sourceKey} onChange={setSourceKey} required hint="A stable identifier for this source." error={fieldErrors.sourceKey} />
         <Field label="Display name" name="source-display-name" value={displayName} onChange={setDisplayName} required error={fieldErrors.displayName} />
-        <div className="field"><label htmlFor="data-source-type">Source type</label><select id="data-source-type" data-testid="select-data-source-type" value={type} onChange={event => { setType(event.target.value as DataSourceType); setFieldErrors({}); setClearCredential(false); setRecordsPath(""); setSourceTimezone(""); setTrustPrivateHost(false); clearDiscovery(); }} aria-describedby="source-type-hint">{DATA_SOURCE_TYPES.map(value => <option value={value} key={value}>{sourceLabels[value]}</option>)}</select><span className="field-hint" id="source-type-hint">Changing type replaces the configuration metadata on save.</span></div>
+        <div className="field"><label htmlFor="data-source-type">Source type</label><select id="data-source-type" data-testid="select-data-source-type" value={type} onChange={event => { setType(event.target.value as DataSourceType); setFieldErrors({}); setClearCredential(false); setRecordsPath(""); setQueryParametersText("{}"); setSourceTimezone(""); setTrustPrivateHost(false); clearDiscovery(); }} aria-describedby="source-type-hint">{DATA_SOURCE_TYPES.map(value => <option value={value} key={value}>{sourceLabels[value]}</option>)}</select><span className="field-hint" id="source-type-hint">Changing type replaces the configuration metadata on save.</span></div>
         <div className="field"><label className="field-label">Record state</label><label className="check-row"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} data-testid="checkbox-source-enabled" /><span><strong>Enabled</strong><br /><span className="field-hint">Metadata only; no connector is started.</span></span></label></div>
         <div className="field span-2"><label htmlFor="source-description">Description</label><textarea id="source-description" data-testid="input-source-description" value={description} onChange={event => setDescription(event.target.value)} placeholder="Purpose, ownership, or operational context" /></div>
       </div>
@@ -1210,6 +1245,12 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
           <input id="rest-endpoint-path" data-testid="input-rest-endpoint-path" value={endpointPath} onChange={event => changeConfiguration(setEndpointPath, event.target.value)} placeholder="v1/events" aria-invalid={Boolean(fieldErrors.endpointPath)} />
           {fieldErrors.endpointPath && <span className="field-error">{fieldErrors.endpointPath}</span>}
           <span className="field-hint">Relative to the base URL. Only GET is supported.</span>
+        </div>
+        <div className="field span-2">
+          <label htmlFor="rest-query-parameters">Query parameters · optional</label>
+          <textarea id="rest-query-parameters" rows={4} data-testid="input-rest-query-parameters" value={queryParametersText} onChange={event => changeConfiguration(setQueryParametersText, event.target.value)} placeholder={'{"latitude":"52.52","timezone":"Europe/Berlin"}'} aria-invalid={Boolean(fieldErrors.queryParameters)} />
+          {fieldErrors.queryParameters && <span className="field-error" data-testid="error-source-query-parameters">{fieldErrors.queryParameters}</span>}
+          <span className="field-hint">Enter a JSON object of non-secret parameter names and text values. Credentials must use the bearer-token environment reference.</span>
         </div>
         <div className="field">
           <label htmlFor="rest-auth-mode">Authentication</label>
@@ -1245,7 +1286,7 @@ function DataSourceFormPage({ editing }: { editing: boolean }) {
           <label htmlFor="rest-records-path">JSON records path</label>
           <input id="rest-records-path" data-testid="input-rest-records-path" value={recordsPath} onChange={event => changeConfiguration(setRecordsPath, event.target.value)} placeholder="data.events" aria-invalid={Boolean(fieldErrors.recordsPath)} />
           {fieldErrors.recordsPath && <span className="field-error">{fieldErrors.recordsPath}</span>}
-          <span className="field-hint">Dot path to the array; leave blank when the response is an array.</span>
+          <span className="field-hint">Dot path to an array in the JSON response. Leave blank to use a top-level array or preserve one top-level object response as a raw record.</span>
         </div>
         <div className="form-section span-2">
           <h2>Historical pagination</h2>

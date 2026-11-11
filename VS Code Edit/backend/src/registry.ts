@@ -190,6 +190,9 @@ function sourceConfigurationMetadata(
         ...(configuration.trustedPrivateHost !== undefined
           ? { trustedPrivateHost: configuration.trustedPrivateHost }
           : {}),
+        ...(configuration.queryParameters !== undefined
+          ? { queryParameters: configuration.queryParameters }
+          : {}),
         ...(configuration.sourceTimezone !== undefined
           ? { sourceTimezone: configuration.sourceTimezone }
           : {}),
